@@ -549,6 +549,10 @@
           this.isDraggingSelection = false;
           this.isResizing = false;
           this.selection = null;
+
+          // 右鍵關閉（雙擊右鍵才退出）
+          this.rightClickExitArmed = false;
+          this.rightClickArmTimer = null;
           
           // 拖曳相關
           this.dragStartX = 0;
@@ -560,9 +564,8 @@
           this.resizeStartY = 0;
           this.resizeStartSelection = null;
           
-          // 上傳 API 設定
-          this.API_URL = "https://api.urusai.cc/v1/upload";
-          this.TOKEN = "5b857ee4fcaff92c51cd2ddfd1578b95670a5ddca0cd9831b5791640b42ad4215b857ee4fcaff92c51cd2ddfd1578b95670a5ddca0cd9831b5791640b42ad421";
+          // 上傳 API 設定（duk.tw）
+          this.API_URL = "https://duk.tw/api/upload";
           
           // 初始化
           this.init();
@@ -808,6 +811,54 @@
           document.getElementById('saveBtn').addEventListener('click', () => this.saveScreenshot());
           document.getElementById('uploadBtn').addEventListener('click', () => this.uploadScreenshot());
           document.getElementById('cancelBtn').addEventListener('click', () => window.close());
+
+          // 右鍵行為（雙右鍵才退出）：
+          // - 若已有選取：清除選取（重抓），不退出
+          // - 若沒有選取：第一次右鍵進入「待退出」狀態並顯示提示；第二次右鍵（1.5 秒內）才關閉
+          this.overlay.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+
+            // 有選取 → 只清除，不退出，並重置待退出狀態
+            if (this.selection) {
+              this.clearSelection();
+              this.rightClickExitArmed = false;
+              if (this.rightClickArmTimer) {
+                clearTimeout(this.rightClickArmTimer);
+                this.rightClickArmTimer = null;
+              }
+              // 顯示提示：已取消選取
+              const help = document.querySelector('.help-text');
+              if (help) {
+                help.textContent = '已取消選取，右鍵再按一次可關閉';
+                help.style.display = 'block';
+                setTimeout(() => { help.style.display = 'none'; }, 1200);
+              }
+              return;
+            }
+
+            // 無選取 → 檢查是否已經武裝
+            if (!this.rightClickExitArmed) {
+              this.rightClickExitArmed = true;
+
+              // 顯示提示：再按一次右鍵關閉
+              const help = document.querySelector('.help-text');
+              if (help) {
+                help.textContent = '再按一次右鍵關閉';
+                help.style.display = 'block';
+              }
+
+              // 1.5 秒後自動解除武裝與隱藏提示
+              this.rightClickArmTimer = setTimeout(() => {
+                this.rightClickExitArmed = false;
+                this.rightClickArmTimer = null;
+                const help2 = document.querySelector('.help-text');
+                if (help2) help2.style.display = 'none';
+              }, 1500);
+            } else {
+              // 已武裝 → 第二次右鍵，關閉
+              window.close();
+            }
+          });
         }
 
         startNewSelection(x, y) {
@@ -1074,39 +1125,127 @@
 
         showToolbar() {
           if (!this.selection) return;
-          
+
+          const SAFE = 8;   // 與選區距離
+          const MARGIN = 10; // 與視窗邊界距離
+
+          // 量測工具列尺寸（若隱藏則暫時顯示以便量測）
+          const tb = this.toolbar;
+          const wasHidden = tb.style.display === 'none' || getComputedStyle(tb).display === 'none';
+          if (wasHidden) {
+            tb.style.visibility = 'hidden';
+            tb.style.display = 'flex';
+          }
+          const rect = tb.getBoundingClientRect();
+          const tw = Math.max(1, rect.width || 210);
+          const th = Math.max(1, rect.height || 60);
+          if (wasHidden) {
+            tb.style.display = 'none';
+            tb.style.visibility = '';
+          }
+
           const { x, y, width, height } = this.selection;
-          
-          // 計算工具列位置
-          let left = x + width - 210; // 調整為 4 個小按鈕的寬度
-          let top = y + height + 8;
-          
-          // 邊界檢查
-          if (left < 10) left = 10;
-          if (left + 210 > window.innerWidth) left = window.innerWidth - 220;
-          if (top + 60 > window.innerHeight) top = y - 70;
-          
-          this.toolbar.style.left = left + 'px';
-          this.toolbar.style.top = top + 'px';
+          const vw = window.innerWidth;
+          const vh = window.innerHeight;
+
+          // 候選位置策略：上方優先 -> 下方 -> 左側 -> 右側 -> 最佳可行回退
+          const candidates = [];
+
+          // 上方置中
+          candidates.push({
+            left: Math.round(x + width / 2 - tw / 2),
+            top: Math.round(y - th - SAFE),
+            ok: () => y - SAFE - th >= MARGIN
+          });
+
+          // 下方置中
+          candidates.push({
+            left: Math.round(x + width / 2 - tw / 2),
+            top: Math.round(y + height + SAFE),
+            ok: () => y + height + SAFE + th <= vh - MARGIN
+          });
+
+          // 左側垂直置中
+          candidates.push({
+            left: Math.round(x - tw - SAFE),
+            top: Math.round(y + height / 2 - th / 2),
+            ok: () => x - SAFE - tw >= MARGIN
+          });
+
+          // 右側垂直置中
+          candidates.push({
+            left: Math.round(x + width + SAFE),
+            top: Math.round(y + height / 2 - th / 2),
+            ok: () => x + width + SAFE + tw <= vw - MARGIN
+          });
+
+          // 選擇第一個滿足條件的位置，若無則回退為下方並做邊界鉗制
+          let chosen = candidates.find(c => c.ok());
+          if (!chosen) {
+            chosen = {
+              left: Math.round(x + width / 2 - tw / 2),
+              top: Math.round(y + height + SAFE)
+            };
+          }
+
+          // 視窗邊界鉗制
+          chosen.left = Math.max(MARGIN, Math.min(vw - tw - MARGIN, chosen.left));
+          chosen.top  = Math.max(MARGIN, Math.min(vh - th - MARGIN, chosen.top));
+
+          // 套用
+          this.toolbar.style.left = `${chosen.left}px`;
+          this.toolbar.style.top = `${chosen.top}px`;
           this.toolbar.style.display = 'flex';
         }
 
         updateToolbarPosition() {
           if (!this.selection || this.toolbar.style.display === 'none') return;
-          
+
+          const SAFE = 8;
+          const MARGIN = 10;
+
+          // 量測工具列尺寸（若不可見則暫時量測）
+          const tb = this.toolbar;
+          let tw, th;
+          const hidden = tb.style.display === 'none' || getComputedStyle(tb).display === 'none';
+          if (hidden) {
+            tb.style.visibility = 'hidden';
+            tb.style.display = 'flex';
+            const r = tb.getBoundingClientRect();
+            tw = Math.max(1, r.width || 210);
+            th = Math.max(1, r.height || 60);
+            tb.style.display = 'none';
+            tb.style.visibility = '';
+          } else {
+            const r = tb.getBoundingClientRect();
+            tw = Math.max(1, r.width || 210);
+            th = Math.max(1, r.height || 60);
+          }
+
           const { x, y, width, height } = this.selection;
-          
-          // 計算工具列位置
-          let left = x + width - 210; // 調整為 4 個小按鈕的寬度
-          let top = y + height + 8;
-          
-          // 邊界檢查
-          if (left < 10) left = 10;
-          if (left + 210 > window.innerWidth) left = window.innerWidth - 220;
-          if (top + 60 > window.innerHeight) top = y - 70;
-          
-          this.toolbar.style.left = left + 'px';
-          this.toolbar.style.top = top + 'px';
+          const vw = window.innerWidth;
+          const vh = window.innerHeight;
+
+          const candidates = [
+            { left: Math.round(x + width / 2 - tw / 2), top: Math.round(y - th - SAFE), ok: () => y - SAFE - th >= MARGIN },
+            { left: Math.round(x + width / 2 - tw / 2), top: Math.round(y + height + SAFE), ok: () => y + height + SAFE + th <= vh - MARGIN },
+            { left: Math.round(x - tw - SAFE),           top: Math.round(y + height / 2 - th / 2), ok: () => x - SAFE - tw >= MARGIN },
+            { left: Math.round(x + width + SAFE),        top: Math.round(y + height / 2 - th / 2), ok: () => x + width + SAFE + tw <= vw - MARGIN },
+          ];
+
+          let chosen = candidates.find(c => c.ok());
+          if (!chosen) {
+            chosen = {
+              left: Math.round(x + width / 2 - tw / 2),
+              top: Math.round(y + height + SAFE)
+            };
+          }
+
+          chosen.left = Math.max(MARGIN, Math.min(vw - tw - MARGIN, chosen.left));
+          chosen.top  = Math.max(MARGIN, Math.min(vh - th - MARGIN, chosen.top));
+
+          this.toolbar.style.left = `${chosen.left}px`;
+          this.toolbar.style.top = `${chosen.top}px`;
         }
 
         async copyToClipboard() {
@@ -1234,29 +1373,30 @@
               tempCanvas.toBlob(resolve, 'image/png');
             });
             
-            // 創建 FormData
-            const formData = new FormData();
-            formData.append('file', blob, 'screenshot.png');
-            formData.append('token', this.TOKEN);
-            formData.append('r18', '0');
-            
-            // 發送請求
-            const response = await fetch(this.API_URL, {
-              method: 'POST',
-              body: formData
+            // 由主進程代理上傳（避免 CORS/403）
+            const bytes = await blob.arrayBuffer();
+            // 嘗試從設定讀取 API Key（不存在也可正常上傳）
+            let apiKey;
+            try {
+              const s = await window.electronAPI.settings.get();
+              apiKey = s?.dukApiKey || s?.upload?.dukApiKey;
+            } catch {}
+            const result = await window.electronAPI.uploadToDuk({
+              bytes,
+              filename: "screenshot.png",
+              contentType: "image/png",
+              apiKey
             });
-            
-            const data = await response.json();
-            
-            if (data.status === 'success') {
-              this.showUploadModal('success', data.data);
-              // 自動複製直連到剪貼簿
-              if (data.data.url_direct) {
-                navigator.clipboard.writeText(data.data.url_direct);
-              }
-            } else {
-              this.showUploadModal('error', data.message || '上傳失敗');
+            if (!result?.success || !result.url) {
+              throw new Error(result?.error || "上傳失敗");
             }
+
+            const dukUrl = result.url;
+
+            this.showUploadModal('success', { url: dukUrl });
+
+            // 自動複製 duk.tw 直連到剪貼簿
+            await navigator.clipboard.writeText(dukUrl);
           } catch (error) {
             console.error('上傳截圖失敗:', error);
             this.showUploadModal('error', error.message || '網路錯誤');
@@ -1272,6 +1412,7 @@
               content.innerHTML = `
                 <div class="upload-title">正在上傳...</div>
                 <div class="upload-loading">
+                  <img src="../assets/icons/logo-imgup2.png" alt="Duk Upload" style="width:48px;height:48px;margin-bottom:8px;object-fit:contain;" />
                   <div class="spinner"></div>
                   <div>請稍候，正在上傳截圖到伺服器</div>
                 </div>
@@ -1287,6 +1428,14 @@
                     連結已複製到剪貼簿
                   </span>
                 </div>
+                ${data?.url ? `
+                <div class="upload-links">
+                  <div class="link-row">
+                    <div class="link-label">直連</div>
+                    <div class="link-value" onclick="navigator.clipboard.writeText('${data.url}')">${data.url}</div>
+                    <button class="copy-btn-small" onclick="navigator.clipboard.writeText('${data.url}')">複製</button>
+                  </div>
+                </div>` : ''}
                 <div class="modal-buttons">
                   <button class="modal-btn modal-btn-primary" onclick="window.close()">完成</button>
                 </div>

@@ -665,16 +665,36 @@ class SettingsManager {
   }
 
   loadSettingsToDialog() {
-    // 載入設定值到對話框
+    // 載入設定值到對話框（相容新舊結構）
+    const pickShortcut = (legacyKey, newPath) => {
+      const legacy = this.get(legacyKey);
+      const modern = this.get(newPath);
+      return this.displayAccelerator(legacy || modern || "");
+    };
+    const pickEnabled = (path, fallback = true) => {
+      const v = this.get(path);
+      return typeof v === "boolean" ? v : fallback;
+    };
+
     const elements = {
       "setting-theme": this.get("theme"),
       "setting-language": this.get("language"),
       "setting-always-on-top": this.get("alwaysOnTop"),
       "setting-minimize-to-tray": this.get("minimizeToTray"),
       "setting-show-notifications": this.get("showNotifications"),
-      "setting-shortcut-region": this.displayAccelerator(this.get("shortcuts.regionCapture")),
-      "setting-shortcut-fullscreen": this.displayAccelerator(this.get("shortcuts.fullScreenCapture")),
-      "setting-shortcut-window": this.displayAccelerator(this.get("shortcuts.activeWindowCapture")),
+
+      // 快捷鍵鍵位（舊：regionCapture/fullScreenCapture/activeWindowCapture；新：shortcuts.region.key 等）
+      "setting-shortcut-region": pickShortcut("shortcuts.regionCapture", "shortcuts.region.key") || "Ctrl+R",
+      "setting-shortcut-fullscreen": pickShortcut("shortcuts.fullScreenCapture", "shortcuts.fullscreen.key") || "PrintScreen",
+      "setting-shortcut-window": pickShortcut("shortcuts.activeWindowCapture", "shortcuts.window.key") || "Alt+W",
+
+      // 快捷鍵啟用狀態（新增：初始化 UI 勾選）
+      "enable-global-shortcuts": pickEnabled("shortcuts.enabled", this.get("enableHotkeys", true)),
+      "shortcut-region-enabled": pickEnabled("shortcuts.region.enabled", true),
+      "shortcut-fullscreen-enabled": pickEnabled("shortcuts.fullscreen.enabled", true),
+      "shortcut-window-enabled": pickEnabled("shortcuts.window.enabled", true),
+
+      // 其他
       "setting-auto-clipboard": this.get("autoSaveToClipboard"),
       "setting-image-format": this.get("defaultImageFormat"),
       "setting-image-quality": this.get("imageQuality"),

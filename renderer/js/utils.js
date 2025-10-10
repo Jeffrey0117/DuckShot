@@ -319,7 +319,90 @@ class Utils {
       },
     };
   }
+  // DataURL 轉 Blob
+  static dataUrlToBlob(dataUrl) {
+    try {
+      const parts = dataUrl.split(",");
+      const header = parts[0] || "";
+      const data = parts[1] || "";
+      const mimeMatch = header.match(/data:(.*?);base64/);
+      const mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+      const binary = atob(data);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+      return new Blob([bytes], { type: mime });
+    } catch (e) {
+      throw new Error("無法解析 DataURL");
+    }
+  }
+
+  // 將圖片來源（data: 或 file:///）轉為 Blob（以原尺寸繪製）
+  static async imageSourceToBlob(src) {
+    if (typeof src !== "string" || src.length === 0) {
+      throw new Error("無效的圖片來源");
+    }
+    if (src.startsWith("data:")) {
+      return Utils.dataUrlToBlob(src);
+    }
+    // 透過 Image + Canvas 載入本機檔案（Electron 的 file:// 可用）
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error("轉換 Blob 失敗"));
+          }, "image/png");
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.onerror = () => reject(new Error("圖片載入失敗"));
+      img.src = src;
+    });
+  }
+
+  // 上傳到 duk.tw（強制回傳 duk.tw 網址）
+  static async uploadToDuk(imageBlob, filename = "screenshot.png") {
+    if (!(imageBlob instanceof Blob)) {
+      throw new Error("imageBlob 必須為 Blob");
+    }
+    const form = new FormData();
+    form.append("image", imageBlob, filename);
+
+    const res = await fetch("https://duk.tw/api/upload", {
+      method: "POST",
+      body: form,
+    });
+
+    if (!res.ok) {
+      throw new Error(`上傳失敗，HTTP ${res.status}`);
+    }
+
+    const json = await res.json();
+    const id = json?.result;
+    const ext = json?.extension || ".png";
+    if (!id) {
+      throw new Error("回應缺少 result");
+    }
+    const dukUrl = `https://duk.tw/${id}${ext}`;
+    return {
+      id,
+      extension: ext,
+      url: dukUrl,
+      originalUrl: json?.originalUrl || null,
+      provider: json?.provider || null,
+      raw: json
+    };
+  }
 }
 
+ 
 // 全域可用
 window.Utils = Utils;

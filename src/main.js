@@ -331,6 +331,8 @@ class DukshotApp {
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
     this.shortcutManager = new ShortcutManager();
+    this.tray = null;
+    this.isQuitting = false;
   }
 
   async initialize() {
@@ -345,6 +347,9 @@ class DukshotApp {
 
     // 設定應用事件
     this.setupAppEvents();
+
+    // 建立系統托盤
+    this.createTray();
 
     // 設定 IPC 處理器
     this.setupIpcHandlers();
@@ -389,6 +394,27 @@ class DukshotApp {
       if (this.isDebug && store.get("openDevTools") === true) {
         this.mainWindow.webContents.openDevTools();
       }
+    });
+
+    // 最小化到托盤
+    this.mainWindow.on("minimize", (e) => {
+      try {
+        if (this.shouldMinimizeToTray()) {
+          e.preventDefault();
+          this.mainWindow.hide();
+        }
+      } catch {}
+    });
+
+    // 關閉時最小化到托盤（非退出）
+    this.mainWindow.on("close", (e) => {
+      if (this.isQuitting) return;
+      try {
+        if (this.shouldMinimizeToTray()) {
+          e.preventDefault();
+          this.mainWindow.hide();
+        }
+      } catch {}
     });
 
     // 視窗關閉事件
@@ -445,11 +471,18 @@ class DukshotApp {
 
     // 應用退出前清理
     electron.app.on("before-quit", () => {
+      this.isQuitting = true;
       // 清理全域快捷鍵
       if (this.shortcutManager) {
         this.shortcutManager.unregisterAll();
       }
       globalShortcut.unregisterAll();
+      try {
+        if (this.tray) {
+          this.tray.destroy();
+          this.tray = null;
+        }
+      } catch {}
     });
 
     // 視窗獲得焦點時，若偵測到未註冊任何快捷鍵且已啟用，嘗試自我修復重註冊
@@ -501,6 +534,103 @@ class DukshotApp {
         console.warn("[focus] 自我修復註冊失敗：", e.message);
       }
     });
+  }
+
+  // 是否最小化到托盤（相容不同設定鍵位）
+  shouldMinimizeToTray() {
+    try {
+      const w = store.get("window");
+      if (w && typeof w.minimizeToTray === "boolean") return w.minimizeToTray;
+    } catch {}
+    const legacy = store.get("minimizeToTray");
+    return legacy === true;
+  }
+
+  // 建立系統托盤
+  createTray() {
+    try {
+      if (this.tray) return;
+      const iconPath = path.join(__dirname, "../assets/icons/logo-imgup.png");
+      this.tray = new electron.Tray(iconPath);
+      this.updateTrayTooltip();
+
+      const buildMenu = () => {
+        const aot = !!store.get("alwaysOnTop");
+        const template = [
+          {
+            label: "顯示主視窗",
+            click: () => {
+              if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.show();
+                this.mainWindow.focus();
+              } else {
+                this.createMainWindow();
+              }
+            },
+          },
+          {
+            label: "開始區域截圖",
+            click: () => this.startRegionCapture(),
+          },
+          {
+            type: "separator",
+          },
+          {
+            label: aot ? "取消置頂" : "設為置頂",
+            click: () => {
+              const next = !aot;
+              try {
+                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                  this.mainWindow.setAlwaysOnTop(next);
+                }
+                store.set("alwaysOnTop", next);
+                this.tray.setContextMenu(electron.Menu.buildFromTemplate(buildMenu()));
+              } catch (e) {}
+            },
+          },
+          {
+            label: this.shouldMinimizeToTray()
+              ? "已啟用最小化到托盤"
+              : "最小化到托盤（可於設定切換）",
+            enabled: false,
+          },
+          {
+            type: "separator",
+          },
+          {
+            label: "退出",
+            click: () => {
+              this.isQuitting = true;
+              electron.app.quit();
+            },
+          },
+        ];
+        return template;
+      };
+
+      this.tray.setContextMenu(electron.Menu.buildFromTemplate(buildMenu()));
+
+      this.tray.on("click", () => {
+        // 左鍵單擊還原/顯示
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.show();
+          this.mainWindow.focus();
+        } else {
+          this.createMainWindow();
+        }
+      });
+    } catch (e) {
+      console.warn("[tray] 建立托盤失敗：", e.message);
+    }
+  }
+
+  updateTrayTooltip() {
+    try {
+      if (!this.tray) return;
+      const aot = !!store.get("alwaysOnTop");
+      const tip = `Dukshot 截圖工具${aot ? "（置頂）" : ""}`;
+      this.tray.setToolTip(tip);
+    } catch {}
   }
 
   setupIpcHandlers() {
@@ -557,6 +687,37 @@ class DukshotApp {
         return { success: true, winOnTop, setting: false };
       } catch (e) {
         return { success: false, error: e.message };
+      }
+    });
+
+    // 直接設定置頂（提供設定頁使用的別名事件）
+    ipcMain.on("set-always-on-top", (event, isOnTop) => {
+      try {
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.setAlwaysOnTop(!!isOnTop);
+          store.set("alwaysOnTop", !!isOnTop);
+          console.log("[set-always-on-top] aot=", !!isOnTop);
+        }
+      } catch (e) {
+        console.warn("[set-always-on-top] failed:", e.message);
+      }
+    });
+
+    // 回傳目前已註冊的快捷鍵（供設定頁顯示診斷資訊）
+    ipcMain.handle("get-registered-shortcuts", () => {
+      try {
+        const shortcuts = store.get("shortcuts") || {};
+        const globalEnabled = shortcuts.enabled !== false;
+        const registered = {};
+        if (this.shortcutManager && this.shortcutManager.shortcuts) {
+          this.shortcutManager.shortcuts.forEach((val, type) => {
+            registered[type] = val?.key || null;
+          });
+        }
+        const count = this.shortcutManager ? this.shortcutManager.shortcuts.size : 0;
+        return { success: true, globalEnabled, count, registered };
+      } catch (e) {
+        return { success: false, error: e.message, globalEnabled: false, count: 0, registered: {} };
       }
     });
 
@@ -1173,6 +1334,73 @@ class DukshotApp {
       } catch (error) {
         console.error("[get-thumbnail] Error generating thumbnail:", error, "for file:", filePath);
         return null;
+      }
+    });
+
+    // 由主進程代理上傳至 duk.tw，補齊常見檢查標頭；若仍 403 可傳 apiKey 嘗試
+    ipcMain.handle("upload-duk", async (_event, payload) => {
+      try {
+        const { bytes, filename, contentType, apiKey } = payload || {};
+        if (!bytes) {
+          return { success: false, error: "缺少圖片位元組" };
+        }
+        // Node 18+ 原生支援 Blob/FormData/fetch
+        const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+        const blob = new Blob([buffer], { type: contentType || "image/png" });
+
+        const form = new FormData();
+        form.append("image", blob, filename || "screenshot.png");
+
+        // 取得有效 API Key（優先順序：渲染端傳入 > 環境變數 > 設定檔）
+        const storedKey =
+          (typeof store?.get === "function" && (store.get("dukApiKey") || (store.get("upload") && store.get("upload").dukApiKey))) ||
+          null;
+        const effectiveKey =
+          (apiKey && typeof apiKey === "string" && apiKey.trim()) ||
+          (process.env.DUK_API_KEY && String(process.env.DUK_API_KEY).trim()) ||
+          storedKey ||
+          "duk_5f3b8d2e92a64a5b9f1c4a7d3e8b1c9f2a4d7e6b3c1a9f0d5e2b7c4a1f8e3d2";
+
+        // 常見服務會檢查這些標頭
+        const baseHeaders = {
+          Referer: "https://duk.tw/",
+          Origin: "https://duk.tw",
+          Accept: "application/json",
+          "User-Agent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 Dukshot/${app.getVersion?.() || "1.0"}`,
+          "x-api-key": effectiveKey
+        };
+
+        const doUpload = (headers) =>
+          fetch("https://duk.tw/api/upload", { method: "POST", headers, body: form });
+
+        // 嘗試：帶標頭
+        let res = await doUpload(baseHeaders);
+
+        // 若 403，再退一步只保留 UA/Accept 與 x-api-key（有些服務不接受自帶 Origin/Referer）
+        if (res.status === 403) {
+          const lighter = {
+            Accept: baseHeaders.Accept,
+            "User-Agent": baseHeaders["User-Agent"],
+            "x-api-key": baseHeaders["x-api-key"],
+          };
+          res = await doUpload(lighter);
+        }
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return { success: false, status: res.status, error: `HTTP ${res.status}`, body: body.slice(0, 500) };
+        }
+
+        const json = await res.json().catch(() => ({}));
+        const id = json?.result;
+        const ext = json?.extension || ".png";
+        if (!id) {
+          return { success: false, error: "回應缺少 result" };
+        }
+        const url = `https://duk.tw/${id}${ext}`;
+        return { success: true, url, raw: json };
+      } catch (e) {
+        return { success: false, error: e.message };
       }
     });
   }

@@ -679,7 +679,13 @@ class DukshotApp {
 
   toggleFullscreen() {
     this.isFullscreen = !this.isFullscreen;
-    // 實作全螢幕切換
+    const body = document.body;
+    if (this.isFullscreen) {
+      body.classList.add("fullscreen-view");
+    } else {
+      body.classList.remove("fullscreen-view");
+    }
+    this.ui?.handleWindowResize?.();
   }
 
   openSettings() {
