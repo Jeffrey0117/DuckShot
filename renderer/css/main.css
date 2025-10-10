@@ -57,22 +57,22 @@
 
 /* 亮色主題 */
 :root[data-theme="light"] {
-  /* 將 Light 主題改為品牌深色風（與 Dark 一致的近黑系） */
-  --background-primary: #0a0a0a;
-  --background-secondary: #141414;
-  --background-tertiary: #2a2a2a;
+  /* Light 主題 = 品牌「較淺深色」版（與 Dark 有層次差異） */
+  --background-primary: #1F2126; /* 基底 */
+  --background-secondary: #2B2F39; /* 區塊/卡片（較淺，形成浮起感） */
+  --background-tertiary: #17181C; /* 分隔/hover/軌道等（較深） */
 
-  --text-primary: #ffffff;
-  --text-secondary: #b0b0b0;
-  --text-tertiary: #808080;
+  --text-primary: #FFFFFF;
+  --text-secondary: #C7CBD3; /* 淺灰，避免被深底吞沒 */
+  --text-tertiary: #9AA1AD;
 
-  --border-light: #2a2a2a;
-  --border-medium: #3a3a3a;
-  --border-dark: #4a4a4a;
+  --border-light: #2B2F39;
+  --border-medium: #3A3F4A;
+  --border-dark: #4A4F5A;
 
-  --shadow-light: rgba(0, 0, 0, 0.2);
-  --shadow-medium: rgba(0, 0, 0, 0.3);
-  --shadow-heavy: rgba(0, 0, 0, 0.4);
+  --shadow-light: rgba(0, 0, 0, 0.18);
+  --shadow-medium: rgba(0, 0, 0, 0.28);
+  --shadow-heavy: rgba(0, 0, 0, 0.36);
 
   /* 舊變數別名（兼容 settings.html 內嵌樣式與既有樣式） */
   --bg-primary: var(--background-primary);
