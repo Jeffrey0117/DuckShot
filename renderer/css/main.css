@@ -451,6 +451,8 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* 瀏覽桌面區塊：用較淺的深色，讓整體更「淡」且有塊狀感 */
+  background: var(--background-secondary);
 }
 
 /* 空狀態 */
