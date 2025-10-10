@@ -58,7 +58,7 @@
 /* 亮色主題 */
 :root[data-theme="light"] {
   --background-primary: #ffffff;
-  --background-secondary: #f8f9fa;
+  --background-secondary: #17181C; /* duk.tw 配色要求 */
   --background-tertiary: #e9ecef;
 
   --text-primary: #212529;
@@ -72,25 +72,43 @@
   --shadow-light: rgba(0, 0, 0, 0.05);
   --shadow-medium: rgba(0, 0, 0, 0.1);
   --shadow-heavy: rgba(0, 0, 0, 0.15);
+
+  /* 舊變數別名（兼容 settings.html 內嵌樣式） */
+  --bg-primary: var(--background-primary);
+  --bg-secondary: var(--background-secondary);
+  --bg-tertiary: var(--background-tertiary);
+  --bg-hover: var(--background-tertiary);
+
+  --primary-color: var(--primary-blue);
+  --border-color: var(--border-light);
 }
 
 /* 暗色主題 */
 :root[data-theme="dark"] {
-  --background-primary: #1a1a1a;
-  --background-secondary: #2d2d2d;
-  --background-tertiary: #404040;
+  --background-primary: #0a0a0a; /* 極致黑趨近 */
+  --background-secondary: #141414;
+  --background-tertiary: #2a2a2a;
 
   --text-primary: #ffffff;
   --text-secondary: #b0b0b0;
   --text-tertiary: #808080;
 
-  --border-light: #404040;
-  --border-medium: #555555;
-  --border-dark: #6a6a6a;
+  --border-light: #2a2a2a;
+  --border-medium: #3a3a3a;
+  --border-dark: #4a4a4a;
 
   --shadow-light: rgba(0, 0, 0, 0.2);
   --shadow-medium: rgba(0, 0, 0, 0.3);
   --shadow-heavy: rgba(0, 0, 0, 0.4);
+
+  /* 舊變數別名（兼容 settings.html 內嵌樣式） */
+  --bg-primary: var(--background-primary);
+  --bg-secondary: var(--background-secondary);
+  --bg-tertiary: var(--background-tertiary);
+  --bg-hover: var(--background-tertiary);
+
+  --primary-color: var(--primary-blue);
+  --border-color: var(--border-light);
 }
 
 /* 基礎樣式重置 */
@@ -571,6 +589,21 @@ body {
   outline-offset: 2px;
 }
 
+/* 全螢幕瀏覽模式 */
+body.fullscreen-view .toolbar,
+body.fullscreen-view .tab-bar,
+body.fullscreen-view .status-bar {
+  display: none !important;
+}
+
+body.fullscreen-view .content-area {
+  height: calc(100vh - 32px); /* 仍保留標題列 */
+}
+
+body.fullscreen-view .image-grid {
+  padding: var(--space-4);
+}
+
 /* 動畫 */
 @keyframes fadeIn {
   from {
@@ -601,6 +634,15 @@ body {
     opacity: 1;
     transform: scale(1);
   }
+}
+
+/* Loading 視窗自訂圖示 */
+.loading-spinner .loading-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  margin-bottom: var(--space-3);
+  display: block;
 }
 
 .animate-fade-in {

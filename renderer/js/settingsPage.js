@@ -42,17 +42,58 @@ class SettingsManager {
   async loadSettings() {
     try {
       // 從主程序獲取設定
-      this.settings = await ipcRenderer.invoke('get-settings');
+      this.settings = await ipcRenderer.invoke('get-settings') || {};
       this.originalSettings = JSON.parse(JSON.stringify(this.settings));
-      
-      // 載入快捷鍵設定
-      if (this.settings.shortcuts) {
-        Object.keys(this.settings.shortcuts).forEach(type => {
-          if (this.shortcuts[type]) {
-            this.shortcuts[type].current = this.settings.shortcuts[type].key || this.shortcuts[type].default;
+
+      // 兼容舊版鍵名並正規化為 A 格式：
+      // A: shortcuts = { enabled, region:{key,enabled}, fullscreen:{...}, window:{...} }
+      // B: { shortcuts:{enabled?:bool}, regionCapture, fullScreenCapture, activeWindowCapture }
+      const normalized = { enabled: true, region: undefined, fullscreen: undefined, window: undefined };
+
+      // 1) 先處理 A 格式
+      if (this.settings.shortcuts && (this.settings.shortcuts.region || this.settings.shortcuts.fullscreen || this.settings.shortcuts.window)) {
+        const s = this.settings.shortcuts;
+        normalized.enabled = s.enabled !== false;
+        ['region','fullscreen','window'].forEach(t => {
+          if (s[t]) {
+            const key = typeof s[t].key === 'string' && s[t].key.trim() ? s[t].key.trim() : this.shortcuts[t]?.default;
+            const enabled = s[t].enabled !== false;
+            normalized[t] = { key, enabled };
           }
         });
+      } else {
+        // 2) 若無 A 格式，嘗試從 B 格式映射
+        const mapBtoA = {
+          region: this.settings.regionCapture,
+          fullscreen: this.settings.fullScreenCapture,
+          window: this.settings.activeWindowCapture
+        };
+        normalized.enabled = this.settings?.shortcuts?.enabled !== false; // 若有舊 shortcuts.enabled 亦沿用
+        ['region','fullscreen','window'].forEach(t => {
+          const keyStr = mapBtoA[t];
+          const key = (typeof keyStr === 'string' && keyStr.trim()) ? keyStr.trim() : this.shortcuts[t]?.default;
+          normalized[t] = { key, enabled: true };
+        });
       }
+
+      // 填補任何缺少的欄位為預設
+      ['region','fullscreen','window'].forEach(t => {
+        if (!normalized[t]) {
+          normalized[t] = { key: this.shortcuts[t]?.default, enabled: true };
+        } else if (!normalized[t].key) {
+          normalized[t].key = this.shortcuts[t]?.default;
+        }
+      });
+
+      // 寫回到 this.settings，之後保存會讓主程式持久化新格式
+      this.settings.shortcuts = normalized;
+
+      // 將目前快捷鍵載入至本地狀態（供 UI 顯示）
+      Object.entries(this.shortcuts).forEach(([type, obj]) => {
+        const k = this.settings.shortcuts?.[type]?.key || obj.default;
+        this.shortcuts[type].current = k;
+      });
+
     } catch (error) {
       console.error('載入設定失敗:', error);
       this.settings = this.getDefaultSettings();
@@ -77,6 +118,9 @@ class SettingsManager {
       }
     };
   }
+
+  // 保留空方法，避免影響既有外觀
+  applyTheme() {}
 
   bindEvents() {
     // 視窗設定

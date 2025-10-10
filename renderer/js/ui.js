@@ -74,16 +74,31 @@ class UIManager {
     return icons[type] || icons.info;
   }
 
-  // 顯示載入指示器
-  showLoading(message = "載入中...") {
+  // 顯示載入指示器（支援自訂圖示）
+  showLoading(message = "載入中...", options = {}) {
     if (this.isLoading) return;
 
     const overlay = document.getElementById("loading-overlay");
     if (!overlay) return;
 
-    const messageEl = overlay.querySelector(".loading-spinner span");
+    // 設定訊息
+    const spinner = overlay.querySelector(".loading-spinner");
+    const messageEl = spinner?.querySelector("span");
     if (messageEl) {
       messageEl.textContent = message;
+    }
+
+    // 如果提供 iconSrc，插入或更新圖示
+    if (spinner && options.iconSrc) {
+      let logo = spinner.querySelector(".loading-logo");
+      if (!logo) {
+        logo = document.createElement("img");
+        logo.className = "loading-logo";
+        spinner.insertBefore(logo, spinner.firstChild);
+      }
+      logo.src = options.iconSrc;
+      logo.alt = "loading";
+      logo.style.display = "block";
     }
 
     overlay.style.display = "flex";
@@ -93,6 +108,12 @@ class UIManager {
   hideLoading() {
     const overlay = document.getElementById("loading-overlay");
     if (overlay) {
+      // 清理自訂圖示，恢復預設狀態
+      const spinner = overlay.querySelector(".loading-spinner");
+      const logo = spinner?.querySelector(".loading-logo");
+      if (logo) {
+        logo.remove();
+      }
       overlay.style.display = "none";
     }
     this.isLoading = false;
@@ -454,6 +475,9 @@ class UIManager {
       case "copy":
         this.copyImage(file);
         break;
+      case "upload":
+        this.uploadImage(file);
+        break;
       case "delete":
         this.deleteImage(file);
         break;
@@ -472,6 +496,56 @@ class UIManager {
       this.showNotification("已複製圖片路徑", "success");
     } catch (error) {
       this.showNotification("複製失敗", "error");
+    }
+  }
+
+  async uploadImage(file) {
+    try {
+      this.showLoading("上傳中...", { iconSrc: "../assets/icons/logo-imgup2.png" });
+      // 取得來源（優先使用原圖來源，其次縮圖/路徑）
+      let src = "";
+      if (typeof file?.path === "string" && file.path.length > 0) {
+        src = file.path;
+      } else if (typeof file?.thumbnail === "string" && file.thumbnail.length > 0) {
+        src = file.thumbnail;
+      } else {
+        throw new Error("無可用圖片來源");
+      }
+
+      // 將來源轉為 Blob（支援 data: 或 file:///）
+      const blob = await Utils.imageSourceToBlob(src);
+
+      // 推得檔名
+      const filename = this.formatFileName(file?.name || "screenshot.png");
+
+      // 透過主進程代理上傳，避免 CORS/403
+      const bytes = await blob.arrayBuffer();
+      // 讀取設定中的 API Key（若無則為 undefined）
+      let apiKey;
+      try {
+        const s = await window.electronAPI.settings.get();
+        apiKey = s?.dukApiKey || s?.upload?.dukApiKey;
+      } catch {}
+      const result = await window.electronAPI.uploadToDuk({
+        bytes,
+        filename,
+        contentType: blob.type || "image/png",
+        apiKey
+      });
+      if (!result?.success || !result.url) {
+        throw new Error(result?.error || "上傳失敗");
+      }
+
+      // 一律使用 duk.tw 完整連結
+      const finalUrl = result.url;
+
+      await Utils.copyToClipboard(finalUrl);
+      this.showNotification(`已上傳並複製連結：${finalUrl}`, "success", 4000);
+    } catch (err) {
+      console.error("Upload failed:", err);
+      this.showNotification("上傳失敗", "error");
+    } finally {
+      this.hideLoading();
     }
   }
 
@@ -531,6 +605,10 @@ class UIManager {
       <div class="context-menu-item" data-action="copy">
         <i data-lucide="copy" class="icon-sm"></i>
         複製
+      </div>
+      <div class="context-menu-item" data-action="upload">
+        <i data-lucide="upload-cloud" class="icon-sm"></i>
+        上傳並複製連結
       </div>
       <div class="context-menu-item" data-action="rename">
         <i data-lucide="type" class="icon-sm"></i>

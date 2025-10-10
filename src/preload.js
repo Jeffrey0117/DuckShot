@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "screen-data",
       "more-files-loaded",
       "toggle-always-on-top",
+      "set-always-on-top"
     ];
 
     if (validChannels.includes(channel)) {
@@ -80,12 +81,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "capture-cancelled",
       "window-close",
       "toggle-always-on-top",
+      "set-always-on-top"
     ];
 
     if (validChannels.includes(channel)) {
       ipcRenderer.send(channel, data);
     }
   },
+
+  // 由主進程代理上傳到 duk.tw（避免 CORS/403）
+  uploadToDuk: (payload) => ipcRenderer.invoke("upload-duk", payload),
 });
 
 // 提供一些實用工具函數
