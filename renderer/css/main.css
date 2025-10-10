@@ -57,23 +57,24 @@
 
 /* 亮色主題 */
 :root[data-theme="light"] {
-  --background-primary: #ffffff;
-  --background-secondary: #17181C; /* duk.tw 配色要求 */
-  --background-tertiary: #e9ecef;
+  /* 將 Light 主題改為品牌深色風（與 Dark 一致的近黑系） */
+  --background-primary: #0a0a0a;
+  --background-secondary: #141414;
+  --background-tertiary: #2a2a2a;
 
-  --text-primary: #212529;
-  --text-secondary: #6c757d;
-  --text-tertiary: #adb5bd;
+  --text-primary: #ffffff;
+  --text-secondary: #b0b0b0;
+  --text-tertiary: #808080;
 
-  --border-light: #e9ecef;
-  --border-medium: #dee2e6;
-  --border-dark: #ced4da;
+  --border-light: #2a2a2a;
+  --border-medium: #3a3a3a;
+  --border-dark: #4a4a4a;
 
-  --shadow-light: rgba(0, 0, 0, 0.05);
-  --shadow-medium: rgba(0, 0, 0, 0.1);
-  --shadow-heavy: rgba(0, 0, 0, 0.15);
+  --shadow-light: rgba(0, 0, 0, 0.2);
+  --shadow-medium: rgba(0, 0, 0, 0.3);
+  --shadow-heavy: rgba(0, 0, 0, 0.4);
 
-  /* 舊變數別名（兼容 settings.html 內嵌樣式） */
+  /* 舊變數別名（兼容 settings.html 內嵌樣式與既有樣式） */
   --bg-primary: var(--background-primary);
   --bg-secondary: var(--background-secondary);
   --bg-tertiary: var(--background-tertiary);
