@@ -57,24 +57,24 @@
 
 /* 亮色主題 */
 :root[data-theme="light"] {
-  /* Light 主題 = 品牌「較淺深色」版（與 Dark 有層次差異） */
-  --background-primary: #1F2126; /* 基底 */
-  --background-secondary: #2B2F39; /* 區塊/卡片（較淺，形成浮起感） */
-  --background-tertiary: #17181C; /* 分隔/hover/軌道等（較深） */
+  /* Light 主題回到接近原本白的品牌淺色系 */
+  --background-primary: #ffffff;   /* 主底：白 */
+  --background-secondary: #F7F8FA; /* 區塊：非常淺灰 */
+  --background-tertiary: #EEF1F4;  /* 分隔/hover：淡灰 */
 
-  --text-primary: #FFFFFF;
-  --text-secondary: #C7CBD3; /* 淺灰，避免被深底吞沒 */
+  --text-primary: #1F2126;  /* 深色文字，品牌接近 */
+  --text-secondary: #6C757D;
   --text-tertiary: #9AA1AD;
 
-  --border-light: #2B2F39;
-  --border-medium: #3A3F4A;
-  --border-dark: #4A4F5A;
+  --border-light: #E9EDF2;
+  --border-medium: #DCE2E8;
+  --border-dark: #C8D0D8;
 
-  --shadow-light: rgba(0, 0, 0, 0.18);
-  --shadow-medium: rgba(0, 0, 0, 0.28);
-  --shadow-heavy: rgba(0, 0, 0, 0.36);
+  --shadow-light: rgba(0, 0, 0, 0.05);
+  --shadow-medium: rgba(0, 0, 0, 0.1);
+  --shadow-heavy: rgba(0, 0, 0, 0.15);
 
-  /* 舊變數別名（兼容 settings.html 內嵌樣式與既有樣式） */
+  /* 舊變數別名（相容） */
   --bg-primary: var(--background-primary);
   --bg-secondary: var(--background-secondary);
   --bg-tertiary: var(--background-tertiary);
@@ -451,8 +451,8 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* 瀏覽桌面區塊：用較淺的深色，讓整體更「淡」且有塊狀感 */
-  background: var(--background-secondary);
+  /* 瀏覽桌面區塊：回到接近白的主底，整體更明亮 */
+  background: var(--background-primary);
 }
 
 /* 空狀態 */
