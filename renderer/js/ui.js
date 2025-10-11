@@ -240,7 +240,7 @@ class UIManager {
     }
   }
 
-  // 更新圖片網格 - 優化批次載入
+  // 更新圖片網格 - 同步新增與刪除
   updateImageGrid(files) {
 
     const grid = document.getElementById("image-grid");
@@ -255,6 +255,9 @@ class UIManager {
 
     emptyState.style.display = "none";
     
+    // 目標清單 ID 集合
+    const desiredIds = new Set(files.map(f => f.id));
+
     // 收集現有的卡片 ID
     const existingCards = new Map();
     grid.querySelectorAll(".file-item").forEach(card => {
@@ -264,6 +267,15 @@ class UIManager {
       }
     });
     
+    // 移除已不存在的卡片
+    let removedCount = 0;
+    existingCards.forEach((card, id) => {
+      if (!desiredIds.has(id)) {
+        card.remove();
+        removedCount++;
+      }
+    });
+
     // 使用 DocumentFragment 提高效能
     const fragment = document.createDocumentFragment();
     let newCardsAdded = 0;
@@ -283,9 +295,10 @@ class UIManager {
       
       // 初始化圖示
       lucide.createIcons();
-      
-      console.log(`[UI] 新增 ${newCardsAdded} 張卡片，總共 ${files.length} 張`);
     }
+
+    // 記錄同步結果
+    console.log(`[UI] 同步完成：新增 ${newCardsAdded}、移除 ${removedCount}，現在共 ${files.length} 張`);
 
     // 同步狀態列
     try {

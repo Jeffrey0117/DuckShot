@@ -393,26 +393,148 @@ class FileManager {
     }
   }
 
-  async deleteFiles(fileIds) {
+  async deleteFiles(items, options = { toTrash: true }) {
     try {
-      // 實際實作中會刪除檔案
-      const deletedFiles = [];
+      if (!Array.isArray(items) || items.length === 0) {
+        return { success: true, deleted: [], failed: [], resolvedCount: 0, debugSamplePath: null };
+      }
 
-      for (const fileId of fileIds) {
-        const file = this.files.get(fileId);
-        if (file) {
-          deletedFiles.push(file);
-          this.files.delete(fileId);
+      // 支援傳入「id 字串」或「檔案物件」
+      const toFileObject = (it) => {
+        if (!it) return null;
+        if (typeof it === "string") {
+          return this.files.get(it) || null;
+        }
+        if (typeof it === "object") {
+          // 若是直接傳進來的檔案物件，直接回傳；若能在 map 找到同名/同路徑，優先用 map 內的
+          if (it.id && this.files.has(it.id)) return this.files.get(it.id);
+          // 嘗試以 fsPath 或 name 匹配 map
+          for (const f of this.files.values()) {
+            if ((it.fsPath && f.fsPath === it.fsPath) || (it.name && f.name === it.name)) {
+              return f;
+            }
+          }
+          return it; // 退回使用傳入的物件
+        }
+        return null;
+      };
+
+      // 解析實體檔案路徑（優先 fsPath，否則從 file:/// 轉回；最後用 lastDirectory + name 推導）
+      const resolveFsPath = (file) => {
+        if (!file) return null;
+        if (file.fsPath && typeof file.fsPath === "string") return file.fsPath;
+
+        const p = file.path;
+        if (typeof p === "string" && p.length > 0) {
+          if (p.startsWith("file:///")) {
+            try {
+              const withoutScheme = p.replace(/^file:\/\/\//, "");
+              const decoded = decodeURIComponent(withoutScheme);
+              return decoded.replace(/\//g, "\\"); // Windows
+            } catch {}
+          }
+          if (!p.startsWith("data:")) return p;
+        }
+
+        try {
+          const base = this.getCurrentFolderPath();
+          if (base && file.name) {
+            const sep = base.includes("\\") ? "\\" : "/";
+            return base.endsWith(sep) ? (base + file.name) : (base + sep + file.name);
+          }
+        } catch {}
+
+        return null;
+      };
+
+      const targetFiles = [];
+      const paths = [];
+
+      for (const it of items) {
+        const f = toFileObject(it);
+        const p = resolveFsPath(f);
+        if (f && p) {
+          targetFiles.push({ id: f.id, file: f, path: p });
+          paths.push(p);
         }
       }
 
-      this.eventEmitter.emit("filesDeleted", deletedFiles);
+      const resolvedCount = paths.length;
+      const debugSamplePath = paths[0] || null;
+
+      if (paths.length === 0) {
+        console.warn("[deleteFiles] 無法解析實體路徑，items=", items);
+        return {
+          success: false,
+          deleted: [],
+          failed: [{ path: "(unknown)", error: "無法解析實體路徑" }],
+          resolvedCount,
+          debugSamplePath
+        };
+      }
+
+      // 透過主進程執行刪除（預設丟到資源回收桶）
+      const ipcFiles = window.electronAPI?.files;
+      const remover = ipcFiles?.remove || ipcFiles?.delete;
+      const res = await (remover
+        ? remover(paths, { toTrash: options?.toTrash !== false })
+        : Promise.resolve({
+            success: false,
+            error: "IPC not available",
+            deleted: [],
+            failed: paths.map(p => ({ path: p, error: "IPC not available" }))
+          }));
+
+      const deletedSet = new Set((res?.deleted || []).map(d => d.path));
+      const actuallyDeleted = [];
+      const failedList = res?.failed || [];
+
+      for (const t of targetFiles) {
+        if (deletedSet.has(t.path) || res?.success === true) {
+          // 從內部清單移除
+          if (t.id && this.files.has(t.id)) {
+            this.files.delete(t.id);
+          } else {
+            // 若沒有 id（例如直接傳物件），以 fsPath 或 name 嘗試刪除
+            for (const [id, f] of this.files.entries()) {
+              if ((t.file.fsPath && f.fsPath === t.file.fsPath) || f.name === t.file.name) {
+                this.files.delete(id);
+              }
+            }
+          }
+          actuallyDeleted.push(t.file);
+        }
+      }
+
+      // 通知 UI
+      this.eventEmitter.emit("filesDeleted", actuallyDeleted);
       this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
 
-      return true;
+      // 保險刷新一次（避免快取與實體不同步）
+      setTimeout(() => {
+        try { this.refresh(); } catch {}
+      }, 150);
+
+      try {
+        console.log("[deleteFiles] 解析路徑:", resolvedCount, "實際刪除:", actuallyDeleted.length, "失敗:", failedList.length, "樣本路徑:", debugSamplePath);
+      } catch {}
+
+      return {
+        success: actuallyDeleted.length > 0 && failedList.length === 0,
+        deleted: actuallyDeleted,
+        failed: failedList,
+        resolvedCount,
+        debugSamplePath
+      };
     } catch (error) {
       console.error("Failed to delete files:", error);
-      throw error;
+      return {
+        success: false,
+        deleted: [],
+        failed: [{ path: "unknown", error: error?.message || String(error) }],
+        resolvedCount: 0,
+        debugSamplePath: null
+      };
     }
   }
 
@@ -647,10 +769,19 @@ class FileManager {
           : encodeURI("file:///" + String(resolvedPath).replace(/\\/g, "/"));
       }
 
+      // 若拿到主行程的實體路徑，更新 lastDirectory 以支援後續「開啟資料夾」與刪除解析
+      try {
+        const rawPath = String(filePath || resolvedPath);
+        const idx = Math.max(rawPath.lastIndexOf("\\"), rawPath.lastIndexOf("/"));
+        if (idx > 0) {
+          this.lastDirectory = rawPath.slice(0, idx);
+        }
+      } catch {}
+
       const file = {
         id: Utils.generateId(),
         name: filename,
-        // UI 用 file:///，縮圖 IPC 用 fsPath
+        // UI 用 file:///，縮圖/刪除 IPC 用 fsPath
         path: displaySrc || encodeURI("file:///" + String(resolvedPath).replace(/\\/g, "/")),
         fsPath: String(filePath || resolvedPath),
         thumbnail: displaySrc, // 讓 <img> 可以立即顯示（DataURL 或 file:///）

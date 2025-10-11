@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     openFolder: (folderPath) => ipcRenderer.invoke("open-folder", folderPath),
     listScreenshots: () => ipcRenderer.invoke("list-screenshots"),
     getThumbnail: (filePath, width) => ipcRenderer.invoke("get-thumbnail", filePath, width),
+    // 使用較安全的名稱 remove，並保留 delete 作為別名
+    remove: (paths, options) => ipcRenderer.invoke("delete-files", paths, options),
+    delete: (paths, options) => ipcRenderer.invoke("delete-files", paths, options),
   },
 
   // 設定 API

@@ -173,11 +173,13 @@ class DukshotApp {
       window.electronAPI.on("capture-completed", (_event, payload) => {
         try {
           const imageData = payload?.data || payload?.imageData;
+          const savedPath = payload?.path;
           if (imageData) {
             // 避免 focus 後 refresh 蓋掉剛新增的截圖
             this.skipNextRefresh = true;
             const filename = this.capture.generateFilename("png");
-            this.fileManager.addScreenshot(imageData, filename);
+            // 傳入主行程儲存後的實體路徑，讓檔案物件帶有 fsPath
+            this.fileManager.addScreenshot(imageData, filename, null, savedPath);
             this.ui.showNotification("區域截圖完成，已加入清單！", "success");
           } else {
             this.ui.showNotification("區域截圖完成", "success");
@@ -202,6 +204,37 @@ class DukshotApp {
 
     this.settings.on("settingsChanged", (settings) => {
       this.applySettings(settings);
+    });
+
+    // 處理單張圖片的刪除（來自右鍵選單）
+    this.ui.on("deleteImage", async (file) => {
+      try {
+        if (!file?.id) return;
+        // 右鍵刪除預設丟到資源回收桶
+        const result = await this.fileManager.deleteFiles([file], { toTrash: true });
+
+        // 更新選取狀態
+        this.selectedImages.delete(file.id);
+        this.ui.updateSelectionUI(this.selectedImages);
+
+        // 顯示結果（加入解析路徑數診斷）
+        const ok = result?.deleted?.length || 0;
+        const bad = result?.failed?.length || 0;
+        const resolved = result?.resolvedCount ?? 0;
+        const sample = result?.debugSamplePath;
+
+        if (ok > 0 && bad === 0) {
+          this.ui.showNotification(`已刪除 ${file.name}`, "success");
+        } else if (ok > 0 && bad > 0) {
+          this.ui.showNotification(`成功 ${ok}、失敗 ${bad}，部分檔案無法刪除`, "warning");
+        } else {
+          const reason = result?.failed?.[0]?.error || `沒有任何檔案被刪除（解析路徑=${resolved}，樣本=${sample || '無'}）`;
+          this.ui.showNotification(`刪除失敗：${reason}`, "error");
+        }
+      } catch (err) {
+        console.error("Delete image failed:", err);
+        this.ui.showNotification("刪除失敗", "error");
+      }
     });
   }
 
@@ -249,7 +282,7 @@ class DukshotApp {
     });
 
     document.getElementById("btn-delete")?.addEventListener("click", () => {
-      this.deleteSelectedFiles();
+      this.deleteSelectedFiles({ toTrash: true });
     });
 
     // 設定按鈕
@@ -406,10 +439,11 @@ class DukshotApp {
         this.selectAllImages();
       }
 
-      // Delete - 刪除選取的檔案
+      // Delete - 刪除選取的檔案（Shift+Delete 永久刪除）
       if (e.key === "Delete" && this.selectedImages.size > 0) {
         e.preventDefault();
-        this.deleteSelectedFiles();
+        const toTrash = !e.shiftKey; // 按住 Shift 時改為永久刪除
+        this.deleteSelectedFiles({ toTrash });
       }
 
       // Escape - 取消選取
@@ -606,12 +640,12 @@ class DukshotApp {
   }
 
   selectAllImages() {
-    const imageCards = document.querySelectorAll(".image-card");
-    imageCards.forEach((card) => {
-      const imageId = card.dataset.imageId;
+    const items = document.querySelectorAll(".file-item");
+    items.forEach((item) => {
+      const imageId = item.dataset.imageId;
       if (imageId) {
         this.selectedImages.add(imageId);
-        card.classList.add("selected");
+        item.classList.add("selected");
       }
     });
     this.ui.updateSelectionUI(this.selectedImages);
@@ -619,29 +653,45 @@ class DukshotApp {
 
   clearSelection() {
     this.selectedImages.clear();
-    document.querySelectorAll(".image-card.selected").forEach((card) => {
-      card.classList.remove("selected");
+    document.querySelectorAll(".file-item.selected").forEach((item) => {
+      item.classList.remove("selected");
     });
     this.ui.updateSelectionUI(this.selectedImages);
   }
 
-  async deleteSelectedFiles() {
+  async deleteSelectedFiles(options = { toTrash: true }) {
     if (this.selectedImages.size === 0) return;
 
-    const confirmed = await this.ui.showConfirmDialog(
-      "確認刪除",
-      `確定要刪除 ${this.selectedImages.size} 個檔案嗎？此操作無法復原。`
-    );
+    const isPermanent = options?.toTrash === false;
+    const title = isPermanent ? "永久刪除" : "確認刪除";
+    const msg = isPermanent
+      ? `確定要「永久刪除」${this.selectedImages.size} 個檔案嗎？這將不經資源回收桶，無法復原。`
+      : `確定要刪除 ${this.selectedImages.size} 個檔案嗎？`;
 
-    if (confirmed) {
-      try {
-        await this.fileManager.deleteFiles(Array.from(this.selectedImages));
-        this.clearSelection();
-        this.ui.showNotification("檔案已刪除", "success");
-      } catch (error) {
-        console.error("Delete failed:", error);
-        this.ui.showNotification("刪除失敗", "error");
+    const confirmed = await this.ui.showConfirmDialog(title, msg, isPermanent ? "永久刪除" : "刪除");
+
+    if (!confirmed) return;
+
+    try {
+      const result = await this.fileManager.deleteFiles(Array.from(this.selectedImages), options);
+      this.clearSelection();
+
+      const ok = result?.deleted?.length || 0;
+      const bad = result?.failed?.length || 0;
+      const resolved = result?.resolvedCount ?? 0;
+      const sample = result?.debugSamplePath;
+
+      if (ok > 0 && bad === 0) {
+        this.ui.showNotification(`${ok} 個檔案已${isPermanent ? "永久刪除" : "移至資源回收桶"}`, "success");
+      } else if (ok > 0 && bad > 0) {
+        this.ui.showNotification(`成功 ${ok}、失敗 ${bad}，部分檔案無法刪除`, "warning");
+      } else {
+        const reason = result?.failed?.[0]?.error || `沒有任何檔案被刪除（解析路徑=${resolved}，樣本=${sample || '無'}）`;
+        this.ui.showNotification(`刪除失敗：${reason}`, "error");
       }
+    } catch (error) {
+      console.error("Delete failed:", error);
+      this.ui.showNotification("刪除失敗", "error");
     }
   }
 
