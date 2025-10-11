@@ -1337,6 +1337,78 @@ class DukshotApp {
       }
     });
 
+    // 實際刪除檔案（預設移至資源回收桶）
+    ipcMain.handle("delete-files", async (_event, paths, options) => {
+      try {
+        const toTrash = options && options.toTrash !== false;
+        const deleted = [];
+        const failed = [];
+
+        if (!Array.isArray(paths) || paths.length === 0) {
+          return { success: true, deleted: [], failed: [] };
+        }
+
+        for (let p of paths) {
+          if (typeof p !== "string" || p.length === 0) continue;
+          try {
+            // 防呆：若不小心傳來 file:///，轉回系統路徑
+            if (p.startsWith("file:///")) {
+              try {
+                const withoutScheme = p.replace(/^file:\/\/\//, "");
+                const decoded = decodeURIComponent(withoutScheme);
+                if (process.platform === "win32") p = decoded.replace(/\//g, "\\");
+                else p = "/" + decoded;
+              } catch {}
+            }
+
+            let ok = false;
+            let lastErr = null;
+
+            if (toTrash && typeof shell.trashItem === "function") {
+              try {
+                await shell.trashItem(p);
+                ok = true;
+              } catch (e1) {
+                lastErr = e1;
+              }
+            }
+
+            // 退而求其次：直接刪除
+            if (!ok) {
+              try {
+                await fs.unlink(p);
+                ok = true;
+              } catch (e2) {
+                lastErr = e2;
+              }
+            }
+
+            if (ok) {
+              deleted.push({ path: p });
+            } else {
+              failed.push({ path: p, error: lastErr?.message || "Unknown error" });
+            }
+          } catch (e) {
+            failed.push({ path: p, error: e.message });
+          }
+        }
+
+        // 詳細記錄
+        try {
+          console.log("[delete-files] result:", {
+            toTrash,
+            total: paths.length,
+            deleted: deleted.length,
+            failed: failed
+          });
+        } catch {}
+
+        return { success: failed.length === 0, deleted, failed };
+      } catch (e) {
+        return { success: false, error: e.message, deleted: [], failed: [] };
+      }
+    });
+
     // 由主進程代理上傳至 duk.tw，補齊常見檢查標頭；若仍 403 可傳 apiKey 嘗試
     ipcMain.handle("upload-duk", async (_event, payload) => {
       try {
