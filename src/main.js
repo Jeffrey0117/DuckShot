@@ -7,6 +7,7 @@ const {
   dialog,
   shell,
   app,
+  net,
 } = electron;
 const path = require("path");
 const fs = require("fs").promises;
@@ -1471,7 +1472,9 @@ class DukshotApp {
           "User-Agent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 DuckShot/${app.getVersion?.() || "1.0"}`,
         };
 
-        const res = await fetch("https://api.urusai.cc/v1/upload", {
+        // 使用 Electron net.fetch（走 Chromium 網路層 + 系統憑證庫），
+        // 才能穿過某些環境（防毒／企業代理）的 TLS 攔截，避免 "fetch failed"。
+        const res = await net.fetch("https://api.urusai.cc/v1/upload", {
           method: "POST",
           headers,
           body: form,
