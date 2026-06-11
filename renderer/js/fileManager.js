@@ -5,7 +5,7 @@
 class FileManager {
   constructor() {
     this.eventEmitter = Utils.createEventEmitter();
-    this.currentFolder = "今日";
+    this.currentFolder = null; // 目前瀏覽資料夾的絕對路徑（由 loadFolder 設定）
     this.files = new Map();
     this.searchQuery = "";
     this.isLoading = false;
@@ -176,10 +176,14 @@ class FileManager {
   }
 
   async getFilesFromFolder(folderName) {
+    // folderName 現在是「要瀏覽的資料夾絕對路徑」（分頁）；未提供則由主進程用預設儲存資料夾
+    const browsePath = (typeof folderName === "string" && /[\\/]/.test(folderName))
+      ? folderName
+      : undefined;
     // 優先從主進程列出真實截圖檔案
     try {
       if (window?.electronAPI?.files?.listScreenshots) {
-        const res = await window.electronAPI.files.listScreenshots();
+        const res = await window.electronAPI.files.listScreenshots(browsePath);
         if (res?.success && Array.isArray(res.files)) {
           // 記錄實際儲存目錄供「開啟資料夾」使用
           this.lastDirectory = res.directory || this.lastDirectory;
@@ -793,7 +797,20 @@ class FileManager {
         dimensions: this.extractImageDimensions(imageData),
       };
 
-      if (targetFolder === this.currentFolder) {
+      // 只有「目前正在瀏覽的資料夾」就是這張圖實際存放的資料夾時，才即時加入視圖
+      const savedDir = (() => {
+        try {
+          const raw = String(filePath || resolvedPath);
+          const idx = Math.max(raw.lastIndexOf("\\"), raw.lastIndexOf("/"));
+          return idx > 0 ? raw.slice(0, idx) : "";
+        } catch { return ""; }
+      })();
+      const normPath = (p) => String(p || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+      const isViewingSavedFolder =
+        !this.currentFolder ||
+        !/[\\/]/.test(String(this.currentFolder)) ||
+        normPath(savedDir) === normPath(this.currentFolder);
+      if (isViewingSavedFolder) {
         this.files.set(file.id, file);
         this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
       }

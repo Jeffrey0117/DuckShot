@@ -16,7 +16,9 @@ class DukshotApp {
 
     // 狀態
     this.selectedImages = new Set();
-    this.currentFolder = "今日";
+    this.currentFolder = null;   // 目前瀏覽的資料夾「絕對路徑」（分頁）
+    this.galleryTabs = [];       // 圖庫分頁：[{ name, path }]
+    this.saveDir = "";           // 預設截圖儲存資料夾
     this.isFullscreen = false;
     this.skipNextRefresh = false; // 截圖後避免立即 refresh 把新圖覆蓋掉
     this.lastSelectedIndex = undefined; // 用於 Shift 多選
@@ -507,6 +509,9 @@ class DukshotApp {
     // 初始化空狀態
     this.ui.showEmptyState();
 
+    // 載入圖庫分頁（可瀏覽的資料夾）並設定目前分頁
+    await this.initGalleryTabs();
+
     // 載入檔案（讓 FileManager 處理所有邏輯）
     try {
       await this.fileManager.loadFolder(this.currentFolder);
@@ -517,6 +522,60 @@ class DukshotApp {
 
     // 更新 UI 狀態
     this.updateUIState();
+  }
+
+  // 載入並渲染圖庫分頁
+  async initGalleryTabs() {
+    try {
+      const res = await window.electronAPI.files.getGalleryTabs();
+      const tabs = (res && res.success && Array.isArray(res.tabs) && res.tabs.length)
+        ? res.tabs
+        : [{ name: "DuckShot", path: (res && res.defaultPath) || "" }];
+      this.galleryTabs = tabs;
+      this.saveDir = (res && res.defaultPath) || (tabs[0] && tabs[0].path) || "";
+      this.currentFolder = tabs[0]?.path || this.saveDir || "";
+      this.renderTabs();
+      this.setActiveTabUI(this.currentFolder);
+    } catch (e) {
+      console.error("載入圖庫分頁失敗:", e);
+      this.galleryTabs = [];
+      this.currentFolder = "";
+    }
+  }
+
+  escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  renderTabs() {
+    const container = document.getElementById("tabs-container");
+    if (!container) return;
+    container.innerHTML = "";
+    this.galleryTabs.forEach((t) => {
+      const tab = document.createElement("div");
+      tab.className = "tab" + (t.path === this.currentFolder ? " active" : "");
+      tab.dataset.folder = t.path;
+      tab.title = t.path;
+      tab.innerHTML = `
+        <i data-lucide="folder" class="icon-sm"></i>
+        <span>${this.escapeHtml(t.name)}</span>
+        <button class="tab-close" title="關閉分頁">
+          <i data-lucide="x" class="icon-xs"></i>
+        </button>`;
+      container.appendChild(tab);
+    });
+    if (window.lucide) lucide.createIcons();
+  }
+
+  setActiveTabUI(folderPath) {
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.classList.toggle("active", tab.dataset.folder === folderPath);
+    });
+  }
+
+  async persistGalleryTabs() {
+    try { await window.electronAPI.files.saveGalleryTabs(this.galleryTabs); } catch (e) {}
   }
 
   setTheme(theme) {
@@ -538,105 +597,60 @@ class DukshotApp {
     this.settings.update({ theme: newTheme });
   }
 
-  switchTab(folderName) {
-    this.currentFolder = folderName;
+  switchTab(folderPath) {
+    if (!folderPath) return;
+    this.currentFolder = folderPath;
+    this.setActiveTabUI(folderPath);
 
-    // 更新分頁 UI
-    document.querySelectorAll(".tab").forEach((tab) => {
-      tab.classList.toggle("active", tab.dataset.folder === folderName);
-    });
-
-    // 載入資料夾內容
-    this.fileManager.loadFolder(folderName);
+    // 載入該資料夾內容
+    this.fileManager.loadFolder(folderPath);
 
     // 清除選取狀態
     this.clearSelection();
   }
 
-  closeTab(folderName) {
-    const tabs = document.querySelectorAll(".tab");
-    if (tabs.length <= 1) {
+  async closeTab(folderPath) {
+    if (this.galleryTabs.length <= 1) {
       this.ui.showNotification("至少需要保留一個分頁", "warning");
       return;
     }
+    const idx = this.galleryTabs.findIndex((t) => t.path === folderPath);
+    if (idx === -1) return;
 
-    const tabToClose = document.querySelector(`[data-folder="${folderName}"]`);
-    if (tabToClose) {
-      tabToClose.remove();
+    this.galleryTabs.splice(idx, 1);
+    await this.persistGalleryTabs();
+    this.renderTabs();
 
-      // 如果關閉的是當前分頁，切換到第一個分頁
-      if (folderName === this.currentFolder) {
-        const firstTab = document.querySelector(".tab");
-        if (firstTab) {
-          this.switchTab(firstTab.dataset.folder);
-        }
+    // 如果關閉的是當前分頁，切換到第一個分頁
+    if (folderPath === this.currentFolder) {
+      this.switchTab(this.galleryTabs[0].path);
+    } else {
+      this.setActiveTabUI(this.currentFolder);
+    }
+  }
+
+  // 新增分頁 = 選一個資料夾來瀏覽
+  async openAddTabModal() {
+    try {
+      const res = await window.electronAPI.files.pickDirectory();
+      if (!res || !res.success || !res.path) return;
+      const path = res.path;
+
+      // 已存在則直接切換
+      if (this.galleryTabs.some((t) => t.path === path)) {
+        this.switchTab(path);
+        return;
       }
+
+      const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
+      this.galleryTabs.push({ name, path });
+      await this.persistGalleryTabs();
+      this.renderTabs();
+      this.switchTab(path);
+    } catch (e) {
+      console.error("新增分頁失敗:", e);
+      this.ui.showNotification("新增分頁失敗", "error");
     }
-  }
-
-  openAddTabModal() {
-    const modal = this.ui.createModal(
-      "新增分頁",
-      `
-      <div class="form-group">
-        <label class="form-label">資料夾名稱</label>
-        <input type="text" class="form-input" id="folder-name" placeholder="輸入資料夾名稱">
-      </div>
-    `,
-      [
-        {
-          text: "取消",
-          class: "btn-secondary",
-          action: () => this.ui.closeModal(),
-        },
-        {
-          text: "新增",
-          class: "btn-primary",
-          action: () => this.addNewTab(),
-        },
-      ]
-    );
-
-    // 自動聚焦輸入框
-    setTimeout(() => {
-      document.getElementById("folder-name")?.focus();
-    }, 100);
-  }
-
-  addNewTab() {
-    const folderName = document.getElementById("folder-name")?.value?.trim();
-    if (!folderName) {
-      this.ui.showNotification("請輸入資料夾名稱", "warning");
-      return;
-    }
-
-    // 檢查是否已存在
-    if (document.querySelector(`[data-folder="${folderName}"]`)) {
-      this.ui.showNotification("資料夾已存在", "warning");
-      return;
-    }
-
-    // 創建新分頁
-    this.createTab(folderName);
-    this.ui.closeModal();
-    this.switchTab(folderName);
-  }
-
-  createTab(folderName) {
-    const tabsContainer = document.getElementById("tabs-container");
-    const tab = document.createElement("div");
-    tab.className = "tab";
-    tab.dataset.folder = folderName;
-    tab.innerHTML = `
-      <i data-lucide="folder" class="icon-sm"></i>
-      <span>${folderName}</span>
-      <button class="tab-close" title="關閉分頁">
-        <i data-lucide="x" class="icon-xs"></i>
-      </button>
-    `;
-
-    tabsContainer.appendChild(tab);
-    lucide.createIcons();
   }
 
   selectAllImages() {

@@ -101,32 +101,10 @@
         </div>
       </div>
 
-      <!-- 分頁列 -->
+      <!-- 分頁列：可瀏覽的資料夾（由 JS 依設定渲染） -->
       <div class="tab-bar">
-        <div class="tabs-container" id="tabs-container">
-          <div class="tab active" data-folder="今日">
-            <i data-lucide="calendar" class="icon-sm"></i>
-            <span>今日</span>
-            <button class="tab-close" title="關閉分頁">
-              <i data-lucide="x" class="icon-xs"></i>
-            </button>
-          </div>
-          <div class="tab" data-folder="工作">
-            <i data-lucide="briefcase" class="icon-sm"></i>
-            <span>工作</span>
-            <button class="tab-close" title="關閉分頁">
-              <i data-lucide="x" class="icon-xs"></i>
-            </button>
-          </div>
-          <div class="tab" data-folder="專案">
-            <i data-lucide="folder" class="icon-sm"></i>
-            <span>專案</span>
-            <button class="tab-close" title="關閉分頁">
-              <i data-lucide="x" class="icon-xs"></i>
-            </button>
-          </div>
-        </div>
-        <button class="tab-add" id="btn-add-tab" title="新增分頁">
+        <div class="tabs-container" id="tabs-container"></div>
+        <button class="tab-add" id="btn-add-tab" title="新增分頁（選一個資料夾來瀏覽）">
           <i data-lucide="plus" class="icon-sm"></i>
         </button>
       </div>

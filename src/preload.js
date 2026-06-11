@@ -32,8 +32,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 檔案系統 API
   files: {
     openFolder: (folderPath) => ipcRenderer.invoke("open-folder", folderPath),
-    listScreenshots: () => ipcRenderer.invoke("list-screenshots"),
+    // 可選 folderPath：指定要列出的資料夾（圖庫分頁），未給則用預設儲存資料夾
+    listScreenshots: (folderPath) => ipcRenderer.invoke("list-screenshots", folderPath),
     getThumbnail: (filePath, width) => ipcRenderer.invoke("get-thumbnail", filePath, width),
+    // 圖庫分頁（可瀏覽的資料夾）
+    pickDirectory: () => ipcRenderer.invoke("pick-directory"),
+    getGalleryTabs: () => ipcRenderer.invoke("get-gallery-tabs"),
+    saveGalleryTabs: (tabs) => ipcRenderer.invoke("save-gallery-tabs", tabs),
     // 使用較安全的名稱 remove，並保留 delete 作為別名
     remove: (paths, options) => ipcRenderer.invoke("delete-files", paths, options),
     delete: (paths, options) => ipcRenderer.invoke("delete-files", paths, options),

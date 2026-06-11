@@ -989,6 +989,46 @@ class DukshotApp {
       }
     });
 
+    // 選一個資料夾來瀏覽（圖庫分頁用，不會改變儲存位置）
+    ipcMain.handle("pick-directory", async () => {
+      try {
+        const win = this.mainWindow;
+        const result = await dialog.showOpenDialog(win, {
+          title: "選擇要瀏覽的資料夾",
+          properties: ["openDirectory"],
+        });
+        if (result.canceled || !result.filePaths || !result.filePaths.length) {
+          return { success: false, canceled: true };
+        }
+        return { success: true, path: result.filePaths[0] };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    });
+
+    // 圖庫分頁（可瀏覽的資料夾清單）持久化
+    ipcMain.handle("get-gallery-tabs", async () => {
+      try {
+        const saveDir = await this.getValidSaveDir();
+        let tabs = store.get("galleryTabs");
+        if (!Array.isArray(tabs) || tabs.length === 0) {
+          tabs = [{ name: "DuckShot", path: saveDir }];
+        }
+        return { success: true, tabs, defaultPath: saveDir };
+      } catch (e) {
+        return { success: false, error: e.message, tabs: [] };
+      }
+    });
+
+    ipcMain.handle("save-gallery-tabs", (_event, tabs) => {
+      try {
+        store.set("galleryTabs", Array.isArray(tabs) ? tabs : []);
+        return { success: true };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    });
+
     // 儲存設定（並確保快捷鍵與置頂狀態立即套用）
     ipcMain.handle("save-settings", (event, settings) => {
       store.store = settings;
@@ -1255,9 +1295,12 @@ class DukshotApp {
     });
 
     // 列出預設截圖資料夾中的圖片（用於前端顯示）- 分批載入版本
-    ipcMain.handle("list-screenshots", async () => {
+    ipcMain.handle("list-screenshots", async (_event, folderPath) => {
       try {
-        const dir = await this.getValidSaveDir();
+        // 可指定要瀏覽的資料夾（分頁），未指定則用預設儲存資料夾
+        const dir = (folderPath && typeof folderPath === "string" && folderPath.trim())
+          ? folderPath
+          : await this.getValidSaveDir();
         console.log(`[list-screenshots] Target directory: ${dir}`);
         
         // 確保目錄存在
