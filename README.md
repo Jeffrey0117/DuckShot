@@ -7,7 +7,7 @@
 <p align="center">高畫質桌面截圖工具 — 區域 / 全螢幕 / 視窗截圖，一鍵儲存、複製、上傳分享。</p>
 
 <p align="center">
-  <a href="https://github.com/Jeffrey0117/DuckShot/releases/latest/download/DuckShot-Setup-1.0.0.exe"><b>⬇️ 下載 Windows 安裝檔</b></a> ·
+  <a href="https://github.com/Jeffrey0117/DuckShot/releases/latest/download/DuckShot-Setup-1.0.1.exe"><b>⬇️ 下載 Windows 安裝檔</b></a> ·
   <a href="https://jeffrey0117.github.io/DuckShot/">官方網站</a> ·
   <a href="https://github.com/Jeffrey0117/DuckShot/releases">所有版本</a>
 </p>
@@ -73,7 +73,7 @@ npm run build:win        # 產出 dist/DuckShot-Setup-<version>.exe
 
 ## 📥 安裝
 
-到 [Releases](https://github.com/Jeffrey0117/DuckShot/releases/latest) 下載 `DuckShot-Setup-1.0.0.exe` 執行即可。Windows 10 / 11（x64）。
+到 [Releases](https://github.com/Jeffrey0117/DuckShot/releases/latest) 下載 `DuckShot-Setup-1.0.1.exe` 執行即可。Windows 10 / 11（x64）。
 
 ## 📄 授權
 
