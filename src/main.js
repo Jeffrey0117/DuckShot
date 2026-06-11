@@ -146,9 +146,28 @@ class SettingsStore {
     try {
       const data = require("fs").readFileSync(settingsPath, "utf8");
       this.settings = JSON.parse(data);
+      this.migrate();
     } catch (error) {
       this.settings = this.defaultSettings();
       this.save();
+    }
+  }
+
+  // 設定遷移：把舊版的桌面預設儲存路徑改為新的「圖片/DuckShot」
+  migrate() {
+    try {
+      const sd = this.settings.saveDirectory;
+      const isOldDesktopDefault =
+        typeof sd === "string" && /[\\/](Desktop|桌面)\/?$/i.test(sd.trim());
+      // 只有在使用者沒有自訂儲存路徑時才遷移，避免覆蓋使用者的選擇
+      const userCustomized = this.settings.customSavePath === true;
+      if (isOldDesktopDefault && !userCustomized) {
+        this.settings.saveDirectory = path.join(os.homedir(), "Pictures", "DuckShot");
+        this.save();
+        console.log("[settings] migrated saveDirectory: Desktop -> Pictures/DuckShot");
+      }
+    } catch (e) {
+      console.warn("[settings] migrate failed:", e.message);
     }
   }
 
