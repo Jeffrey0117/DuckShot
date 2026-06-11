@@ -502,23 +502,29 @@
 
     <!-- 工具列 -->
     <div class="capture-toolbar" id="captureToolbar">
-      <button class="capture-btn" id="copyBtn" title="複製截圖 (Ctrl+C)">
+      <button class="capture-btn" id="copyBtn" title="複製截圖 (1 / Ctrl+C)">
         <svg viewBox="0 0 24 24" width="18" height="18">
           <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"/>
         </svg>
         <div class="btn-text">複製</div>
       </button>
-      <button class="capture-btn" id="saveBtn" title="儲存截圖 (Enter)">
+      <button class="capture-btn" id="saveBtn" title="儲存截圖 (2 / Enter)">
         <svg viewBox="0 0 24 24" width="18" height="18">
           <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/>
         </svg>
         <div class="btn-text">儲存</div>
       </button>
-      <button class="capture-btn" id="uploadBtn" title="上傳圖片">
+      <button class="capture-btn" id="uploadBtn" title="上傳圖片 (3)">
         <svg viewBox="0 0 24 24" width="18" height="18">
           <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z" fill="currentColor"/>
         </svg>
         <div class="btn-text">上傳</div>
+      </button>
+      <button class="capture-btn" id="continueBtn" title="繼續截圖：存檔後再截一張 (4)">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
+        </svg>
+        <div class="btn-text">繼續</div>
       </button>
       <button class="capture-btn" id="cancelBtn" title="取消 (Esc)">
         <svg viewBox="0 0 24 24" width="18" height="18">
@@ -810,6 +816,7 @@
           document.getElementById('copyBtn').addEventListener('click', () => this.copyToClipboard());
           document.getElementById('saveBtn').addEventListener('click', () => this.saveScreenshot());
           document.getElementById('uploadBtn').addEventListener('click', () => this.uploadScreenshot());
+          document.getElementById('continueBtn').addEventListener('click', () => this.continueCapture());
           document.getElementById('cancelBtn').addEventListener('click', () => window.close());
 
           // 右鍵行為（雙右鍵才退出）：
@@ -1112,6 +1119,12 @@
           } else if ((e.ctrlKey || e.metaKey) && e.key === 'c' && this.selection) {
             e.preventDefault();
             this.copyToClipboard();
+          } else if (this.selection && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // 數字鍵：1 複製、2 儲存、3 上傳、4 繼續截圖（純鍵盤操作）
+            if (e.key === '1') { e.preventDefault(); this.copyToClipboard(); }
+            else if (e.key === '2') { e.preventDefault(); this.saveScreenshot(); }
+            else if (e.key === '3') { e.preventDefault(); this.uploadScreenshot(); }
+            else if (e.key === '4') { e.preventDefault(); this.continueCapture(); }
           }
         }
 
@@ -1340,6 +1353,51 @@
             }
           } catch (error) {
             console.error('儲存截圖失敗:', error);
+          }
+        }
+
+        // 繼續截圖：存檔目前這張，然後沿用同一視窗重新擷取桌面，讓你連續截下一張
+        async continueCapture() {
+          if (!this.selection) return;
+
+          try {
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = this.selection.width * this.dpr;
+            tempCanvas.height = this.selection.height * this.dpr;
+
+            tempCtx.imageSmoothingEnabled = false;
+            tempCtx.mozImageSmoothingEnabled = false;
+            tempCtx.webkitImageSmoothingEnabled = false;
+            tempCtx.msImageSmoothingEnabled = false;
+
+            tempCtx.drawImage(
+              this.canvas,
+              this.selection.x * this.dpr,
+              this.selection.y * this.dpr,
+              this.selection.width * this.dpr,
+              this.selection.height * this.dpr,
+              0,
+              0,
+              tempCanvas.width,
+              tempCanvas.height
+            );
+
+            // 1) 存檔目前這張
+            const imageData = tempCanvas.toDataURL('image/png');
+            const result = await window.electronAPI.saveScreenshot(imageData, 'png');
+            if (!result || !result.success) {
+              console.error('繼續截圖：存檔失敗', result && result.error);
+              return;
+            }
+
+            // 2) 清掉目前選取與工具列，準備截下一張
+            this.clearSelection();
+
+            // 3) 請主進程重新擷取桌面並送回新畫面（沿用同一視窗）
+            await window.electronAPI.capture.continueRegion();
+          } catch (error) {
+            console.error('繼續截圖失敗:', error);
           }
         }
 

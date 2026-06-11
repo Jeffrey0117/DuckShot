@@ -830,6 +830,41 @@ class DukshotApp {
       return this.startActiveWindowCapture();
     });
 
+    // 繼續截圖：沿用同一個覆蓋層視窗，重新擷取桌面送回去（用於連續截圖）
+    ipcMain.handle("continue-region-capture", async () => {
+      try {
+        const cw = this.captureWindow;
+        if (!cw || cw.isDestroyed()) {
+          return { success: false, error: "截圖視窗不存在" };
+        }
+        // 先把覆蓋層藏起來，避免它被擷取進下一張畫面
+        cw.hide();
+        await optimizedSleep(COMPOSITOR_WAIT_TIME_2, "繼續截圖-合成器等待");
+
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: getOptimalThumbnailSize(),
+        });
+        if (!sources.length) {
+          if (!cw.isDestroyed()) cw.show();
+          return { success: false, error: "無法獲取螢幕源" };
+        }
+        const screenData = sources[0].thumbnail.toDataURL();
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send("screen-data", screenData);
+          this.captureWindow.setAlwaysOnTop(true, "screen-saver", 1);
+          this.captureWindow.show();
+          this.captureWindow.focus();
+        }
+        return { success: true };
+      } catch (e) {
+        try {
+          if (this.captureWindow && !this.captureWindow.isDestroyed()) this.captureWindow.show();
+        } catch {}
+        return { success: false, error: e.message };
+      }
+    });
+
     // 儲存截圖（支援可選 label 以利 A/B 命名）
     ipcMain.handle("save-screenshot", async (event, imageData, format, label) => {
       try {
