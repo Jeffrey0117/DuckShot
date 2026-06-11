@@ -1344,9 +1344,20 @@
             // 轉換為高品質 PNG（PNG 不需要品質參數）
             const imageData = tempCanvas.toDataURL('image/png');
             const result = await window.electronAPI.saveScreenshot(imageData, 'png');
-            
+
             if (result.success) {
               console.log('截圖儲存成功');
+              // 儲存的同時也複製到剪貼簿（用主進程剪貼簿，不需視窗焦點）
+              try {
+                await window.electronAPI.clipboard.writeImage(imageData);
+              } catch (e) {
+                try {
+                  await new Promise((resolve) => tempCanvas.toBlob(async (blob) => {
+                    try { await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]); } catch {}
+                    resolve();
+                  }));
+                } catch {}
+              }
               window.close();
             } else {
               console.error('截圖儲存失敗:', result.error);
