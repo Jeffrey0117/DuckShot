@@ -111,10 +111,6 @@ class SettingsManager {
         region: { enabled: true, key: 'Alt+A' },
         fullscreen: { enabled: true, key: 'PrintScreen' },
         window: { enabled: true, key: 'Alt+W' }
-      },
-      general: {
-        autoSave: false,
-        screenshotFormat: 'png'
       }
     };
   }
@@ -166,13 +162,28 @@ class SettingsManager {
       });
     });
 
-    // 一般設定
-    document.getElementById('auto-save').addEventListener('change', (e) => {
-      this.settings.autoSave = e.target.checked;
+    // 一般設定：儲存位置
+    document.getElementById('browse-save-dir').addEventListener('click', async () => {
+      try {
+        const res = await ipcRenderer.invoke('choose-save-directory');
+        if (res && res.success && res.path) {
+          this.settings.saveDirectory = res.path;
+          this.settings.customSavePath = true;
+          document.getElementById('save-directory').value = res.path;
+          document.getElementById('save-directory').title = res.path;
+        }
+      } catch (err) {
+        console.error('選擇儲存位置失敗:', err);
+      }
     });
 
-    document.getElementById('screenshot-format').addEventListener('change', (e) => {
-      this.settings.screenshotFormat = e.target.value;
+    document.getElementById('open-save-dir').addEventListener('click', async () => {
+      try {
+        const dir = document.getElementById('save-directory').value;
+        await ipcRenderer.invoke('open-folder', dir || undefined);
+      } catch (err) {
+        console.error('開啟資料夾失敗:', err);
+      }
     });
 
     // 按鈕事件
@@ -219,11 +230,25 @@ class SettingsManager {
       this.toggleShortcutsList(this.settings.shortcuts.enabled !== false);
     }
 
-    // 更新一般設定
-    document.getElementById('auto-save').checked =
-      this.settings.autoSave || false;
-    document.getElementById('screenshot-format').value =
-      this.settings.screenshotFormat || 'png';
+    // 更新一般設定：顯示目前有效的儲存資料夾
+    this.loadSaveDirectory();
+  }
+
+  async loadSaveDirectory() {
+    const input = document.getElementById('save-directory');
+    if (!input) return;
+    try {
+      const res = await ipcRenderer.invoke('get-save-directory');
+      const dir = (res && res.success && res.path)
+        ? res.path
+        : (this.settings.saveDirectory || '');
+      input.value = dir;
+      input.title = dir;
+    } catch (err) {
+      const dir = this.settings.saveDirectory || '';
+      input.value = dir;
+      input.title = dir;
+    }
   }
 
   toggleShortcutsList(enabled) {

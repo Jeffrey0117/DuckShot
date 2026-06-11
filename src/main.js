@@ -176,8 +176,6 @@ class SettingsStore {
   defaultSettings() {
     return {
         theme: "light",
-        autoSave: true,
-        screenshotFormat: "png",
         // 預設儲存到「圖片」資料夾下的 DuckShot 子目錄（可在設定中覆蓋）
         saveDirectory: path.join(os.homedir(), "Pictures", "DuckShot"),
         // 僅在開發模式且此設定為 true 時才會自動開啟 DevTools
@@ -957,6 +955,38 @@ class DukshotApp {
     // 獲取設定
     ipcMain.handle("get-settings", () => {
       return store.store;
+    });
+
+    // 取得目前有效的截圖儲存資料夾（供設定頁顯示）
+    ipcMain.handle("get-save-directory", async () => {
+      try {
+        return { success: true, path: await this.getValidSaveDir() };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    });
+
+    // 讓使用者選擇截圖儲存資料夾
+    ipcMain.handle("choose-save-directory", async () => {
+      try {
+        const win = this.settingsWindow && !this.settingsWindow.isDestroyed()
+          ? this.settingsWindow
+          : this.mainWindow;
+        const result = await dialog.showOpenDialog(win, {
+          title: "選擇截圖儲存位置",
+          properties: ["openDirectory", "createDirectory"],
+          defaultPath: await this.getValidSaveDir(),
+        });
+        if (result.canceled || !result.filePaths || !result.filePaths.length) {
+          return { success: false, canceled: true };
+        }
+        const dir = result.filePaths[0];
+        store.set("saveDirectory", dir);
+        store.set("customSavePath", true); // 標記為使用者自訂，避免被遷移邏輯改回預設
+        return { success: true, path: dir };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
     });
 
     // 儲存設定（並確保快捷鍵與置頂狀態立即套用）

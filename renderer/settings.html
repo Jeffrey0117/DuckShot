@@ -302,27 +302,13 @@
       <h3>一般設定</h3>
       <div class="setting-item">
         <div class="setting-label">
-          <span class="label-text">自動儲存</span>
-          <span class="label-description">截圖後自動儲存到指定資料夾</span>
+          <span class="label-text">儲存位置</span>
+          <span class="label-description">截圖儲存的資料夾（預設：圖片\DuckShot）</span>
         </div>
         <div class="setting-control">
-          <label class="toggle-switch">
-            <input type="checkbox" id="auto-save">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-      <div class="setting-item">
-        <div class="setting-label">
-          <span class="label-text">截圖格式</span>
-          <span class="label-description">選擇預設的截圖儲存格式</span>
-        </div>
-        <div class="setting-control">
-          <select id="screenshot-format" class="form-select">
-            <option value="png">PNG</option>
-            <option value="jpg">JPG</option>
-            <option value="webp">WebP</option>
-          </select>
+          <input type="text" id="save-directory" class="shortcut-input" style="width: 240px;" readonly title="">
+          <button class="edit-key-btn" id="browse-save-dir">瀏覽…</button>
+          <button class="reset-key-btn" id="open-save-dir">開啟</button>
         </div>
       </div>
     </div>
