@@ -112,6 +112,13 @@ class Utils {
 
   // 複製文字到剪貼簿
   static async copyToClipboard(text) {
+    // 優先用主進程剪貼簿（不需視窗焦點）
+    try {
+      if (window.electronAPI?.clipboard?.writeText) {
+        const r = await window.electronAPI.clipboard.writeText(text);
+        if (r?.success) return true;
+      }
+    } catch (e) {}
     try {
       await navigator.clipboard.writeText(text);
       return true;

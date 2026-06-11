@@ -8,6 +8,7 @@ const {
   shell,
   app,
   net,
+  clipboard,
 } = electron;
 const path = require("path");
 const fs = require("fs").promises;
@@ -1474,11 +1475,21 @@ class DukshotApp {
 
         // 使用 Electron net.fetch（走 Chromium 網路層 + 系統憑證庫），
         // 才能穿過某些環境（防毒／企業代理）的 TLS 攔截，避免 "fetch failed"。
-        const res = await net.fetch("https://api.urusai.cc/v1/upload", {
-          method: "POST",
-          headers,
-          body: form,
-        });
+        // 加 60 秒逾時，避免網路異常時無限轉圈。
+        let res;
+        try {
+          res = await net.fetch("https://api.urusai.cc/v1/upload", {
+            method: "POST",
+            headers,
+            body: form,
+            signal: AbortSignal.timeout(60000),
+          });
+        } catch (fe) {
+          if (fe && (fe.name === "TimeoutError" || fe.name === "AbortError")) {
+            return { success: false, error: "上傳逾時（網路太慢或檔案過大），請再試一次" };
+          }
+          throw fe;
+        }
 
         if (!res.ok) {
           const body = await res.text().catch(() => "");
@@ -1491,6 +1502,30 @@ class DukshotApp {
           return { success: false, error: json?.message || "上傳失敗（回應格式不符）", raw: json };
         }
         return { success: true, url, deleteUrl: json?.data?.url_delete, raw: json };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    });
+
+    // 由主進程寫入剪貼簿（不需視窗焦點，避免 "Document is not focused" 錯誤）
+    ipcMain.handle("clipboard-write-text", (_event, text) => {
+      try {
+        clipboard.writeText(String(text == null ? "" : text));
+        return { success: true };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    });
+
+    ipcMain.handle("clipboard-write-image", (_event, dataUrl) => {
+      try {
+        if (!dataUrl || typeof dataUrl !== "string") {
+          return { success: false, error: "缺少影像資料" };
+        }
+        const img = electron.nativeImage.createFromDataURL(dataUrl);
+        if (img.isEmpty()) return { success: false, error: "影像為空" };
+        clipboard.writeImage(img);
+        return { success: true };
       } catch (e) {
         return { success: false, error: e.message };
       }

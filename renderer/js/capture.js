@@ -183,11 +183,15 @@ class CaptureManager {
 
   async copyToClipboard(imageData) {
     try {
-      // 將 Data URL 轉換為 Blob
+      // 優先用主進程剪貼簿寫入影像（不需視窗焦點）
+      if (window.electronAPI?.clipboard?.writeImage) {
+        const r = await window.electronAPI.clipboard.writeImage(imageData);
+        if (r?.success) return true;
+      }
+
+      // 降級：瀏覽器剪貼簿
       const response = await fetch(imageData);
       const blob = await response.blob();
-
-      // 複製到剪貼簿
       await navigator.clipboard.write([
         new ClipboardItem({
           [blob.type]: blob,

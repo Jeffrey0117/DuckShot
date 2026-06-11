@@ -1278,12 +1278,19 @@
               tempCanvas.height
             );
             
-            tempCanvas.toBlob(async (blob) => {
-              await navigator.clipboard.write([
-                new ClipboardItem({ [blob.type]: blob })
-              ]);
-              window.close();
-            });
+            // 用主進程剪貼簿寫入影像（不需視窗焦點）
+            try {
+              const dataUrl = tempCanvas.toDataURL('image/png');
+              await window.electronAPI.clipboard.writeImage(dataUrl);
+            } catch (e) {
+              try {
+                await new Promise((resolve) => tempCanvas.toBlob(async (blob) => {
+                  try { await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]); } catch {}
+                  resolve();
+                }));
+              } catch {}
+            }
+            window.close();
           } catch (error) {
             console.error('複製到剪貼簿失敗:', error);
           }
@@ -1395,8 +1402,12 @@
 
             this.showUploadModal('success', { url: dukUrl });
 
-            // 自動複製 duk.tw 直連到剪貼簿
-            await navigator.clipboard.writeText(dukUrl);
+            // 自動複製直連到剪貼簿（用主進程剪貼簿，避免視窗失焦報錯）
+            try {
+              await window.electronAPI.clipboard.writeText(dukUrl);
+            } catch (e) {
+              try { await navigator.clipboard.writeText(dukUrl); } catch {}
+            }
           } catch (error) {
             console.error('上傳截圖失敗:', error);
             this.showUploadModal('error', error.message || '網路錯誤');
@@ -1432,8 +1443,8 @@
                 <div class="upload-links">
                   <div class="link-row">
                     <div class="link-label">直連</div>
-                    <div class="link-value" onclick="navigator.clipboard.writeText('${data.url}')">${data.url}</div>
-                    <button class="copy-btn-small" onclick="navigator.clipboard.writeText('${data.url}')">複製</button>
+                    <div class="link-value" onclick="window.electronAPI.clipboard.writeText('${data.url}')">${data.url}</div>
+                    <button class="copy-btn-small" onclick="window.electronAPI.clipboard.writeText('${data.url}')">複製</button>
                   </div>
                 </div>` : ''}
                 <div class="modal-buttons">

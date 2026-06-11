@@ -504,8 +504,9 @@ class UIManager {
 
   async copyImage(file) {
     try {
-      // 複製圖片到剪貼簿
-      await navigator.clipboard.writeText(file.path);
+      // 複製圖片路徑到剪貼簿（透過主進程，避免視窗失焦報錯）
+      const ok = await Utils.copyToClipboard(file.path);
+      if (!ok) throw new Error("copy failed");
       this.showNotification("已複製圖片路徑", "success");
     } catch (error) {
       this.showNotification("複製失敗", "error");

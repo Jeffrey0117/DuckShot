@@ -92,8 +92,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
   },
 
-  // 由主進程代理上傳到 duk.tw（避免 CORS/403）
+  // 由主進程代理上傳到 URUSAI! 圖床（避免 CORS / TLS 攔截）
   uploadToDuk: (payload) => ipcRenderer.invoke("upload-duk", payload),
+
+  // 由主進程寫入剪貼簿（不需視窗焦點，避免 "Document is not focused"）
+  clipboard: {
+    writeText: (text) => ipcRenderer.invoke("clipboard-write-text", text),
+    writeImage: (dataUrl) => ipcRenderer.invoke("clipboard-write-image", dataUrl),
+  },
 });
 
 // 提供一些實用工具函數
