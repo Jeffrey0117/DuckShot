@@ -1548,7 +1548,10 @@ class DukshotApp {
       }
     });
 
-    // 由主進程代理上傳至 duk.tw，補齊常見檢查標頭；若仍 403 可傳 apiKey 嘗試
+    // 由主進程代理上傳圖片（避免 CORS / TLS 攔截）。
+    // TODO（未來）：將上傳改為「多供應商備援鏈」——依序嘗試多個圖床，
+    //   任一家失敗就自動換下一家，避免單一服務中斷時無法取得分享連結。
+    //   （截圖本身一律已存本機，故此功能不影響資料安全，只影響分享連結。）
     ipcMain.handle("upload-duk", async (_event, payload) => {
       try {
         const { bytes, filename, contentType, apiKey } = payload || {};
