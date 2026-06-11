@@ -1515,6 +1515,10 @@ class DukshotApp {
     }
 
     try {
+      // 並行：立刻開始建立並載入截圖覆蓋層（先不顯示），
+      // 與下面的隱身等待 + desktopCapturer 擷取同時進行，縮短覆蓋層出現時間。
+      this.createCaptureWindow();
+
       // 只有當主視窗「實際可見」時才需要隱身並等待合成器；
       // 若主視窗已最小化／在托盤（使用者用全域快捷鍵的常見情況），
       // 直接擷取即可，省去隱身與等待 → 截圖介面瞬間出現，且事後不會把視窗彈出來。
@@ -1562,10 +1566,10 @@ class DukshotApp {
       const screenData = sources[0].thumbnail.toDataURL();
       console.debug("[區域截圖] 步驟5 - 桌面畫面擷取完成");
 
-      // 步驟 4: 創建並顯示截圖視窗（主視窗還原將在截圖完成後執行）
-      console.debug("[區域截圖] 步驟6 - 創建截圖視窗");
-      this.createCaptureWindow(screenData);
-      console.debug("[區域截圖] 截圖視窗創建完成");
+      // 步驟 4: 覆蓋層已並行載入，這裡只需送資料並顯示
+      console.debug("[區域截圖] 步驟6 - 顯示截圖視窗");
+      await this.showCaptureWindow(screenData);
+      console.debug("[區域截圖] 截圖視窗已顯示");
 
       return {
         success: true,
@@ -1574,8 +1578,12 @@ class DukshotApp {
       };
     } catch (error) {
       console.error("Error starting region capture:", error);
-      // 發生錯誤時立即還原主視窗
-      this.restoreMainWindow();
+      // 發生錯誤時清掉並行建立中的覆蓋層（其 closed 事件會還原主視窗）
+      if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+        this.captureWindow.close();
+      } else {
+        this.restoreMainWindow();
+      }
       return { success: false, error: error.message };
     }
   }
@@ -1809,46 +1817,23 @@ class DukshotApp {
     });
 
     console.debug("[區域截圖] 載入 capture.html");
-    // 載入截圖界面
+    // 載入截圖界面，並以 promise 記錄「載入完成」時機，
+    // 讓 startRegionCapture 能與 desktopCapturer 擷取「並行」進行（加速覆蓋層出現）。
+    this.captureWindowReady = new Promise((resolve) => {
+      this.captureWindow.webContents.once("did-finish-load", () => {
+        console.debug("[區域截圖] capture.html 載入完成");
+        resolve();
+      });
+    });
     this.captureWindow.loadFile(
       path.join(__dirname, "../renderer/capture.html")
     );
-
-    // 如果有螢幕數據，傳遞給截圖界面並在載入完成後顯示視窗
-    if (screenData) {
-      this.captureWindow.webContents.once("did-finish-load", () => {
-        console.debug("[區域截圖] capture.html 載入完成，傳送螢幕資料");
-        
-        // 步驟 5: 發送螢幕資料給渲染進程
-        this.captureWindow.webContents.send("screen-data", screenData);
-        
-        // 步驟 6: 設定視窗層級為最上層
-        // 使用 setImmediate 確保在下一個事件循環執行
-        setImmediate(() => {
-          // 設定最高層級並顯示
-          this.captureWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-          this.captureWindow.setVisibleOnAllWorkspaces(true); // 在所有工作區可見
-          
-          // 步驟 7: 顯示截圖視窗
-          console.debug("[區域截圖] 顯示截圖視窗");
-          this.captureWindow.show();
-          this.captureWindow.focus(); // 獲取焦點
-          console.debug("[區域截圖] 截圖視窗已顯示並聚焦");
-        });
-      });
-    } else {
-      // 如果沒有螢幕數據，直接顯示（通常不會發生）
-      this.captureWindow.webContents.once("did-finish-load", () => {
-        this.captureWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-        this.captureWindow.show();
-        this.captureWindow.focus();
-      });
-    }
 
     // 截圖視窗關閉事件 - 在此還原主視窗
     this.captureWindow.on("closed", () => {
       console.debug("[區域截圖] 截圖視窗已關閉，開始還原主視窗");
       this.captureWindow = null;
+      this.captureWindowReady = null;
       // 完整還原主視窗狀態
       this.restoreMainWindow();
     });
@@ -1857,6 +1842,26 @@ class DukshotApp {
     if (this.isDebug && store.get("openDevTools") === true) {
       this.captureWindow.webContents.openDevTools();
     }
+
+    return this.captureWindowReady;
+  }
+
+  // 等覆蓋層載入完成後，送入螢幕資料並顯示（與 createCaptureWindow 拆分以支援並行載入）
+  async showCaptureWindow(screenData) {
+    if (this.captureWindowReady) {
+      await this.captureWindowReady;
+    }
+    if (!this.captureWindow || this.captureWindow.isDestroyed()) return;
+
+    console.debug("[區域截圖] 傳送螢幕資料並顯示覆蓋層");
+    if (screenData) {
+      this.captureWindow.webContents.send("screen-data", screenData);
+    }
+    this.captureWindow.setAlwaysOnTop(true, "screen-saver", 1);
+    try { this.captureWindow.setVisibleOnAllWorkspaces(true); } catch {}
+    this.captureWindow.show();
+    this.captureWindow.focus();
+    console.debug("[區域截圖] 覆蓋層已顯示並聚焦");
   }
 
   // 新增主視窗還原方法
