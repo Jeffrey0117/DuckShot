@@ -1449,43 +1449,33 @@ class DukshotApp {
         const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
         const blob = new Blob([buffer], { type: contentType || "image/png" });
 
+        // URUSAI! 圖床 API：multipart/form-data，欄位名為 file，token 選填（無則匿名上傳）
         const form = new FormData();
-        form.append("image", blob, filename || "screenshot.png");
+        form.append("file", blob, filename || "screenshot.png");
+        form.append("r18", "0");
 
-        // 取得有效 API Key（優先順序：渲染端傳入 > 環境變數 > 設定檔）
-        const storedKey =
-          (typeof store?.get === "function" && (store.get("dukApiKey") || (store.get("upload") && store.get("upload").dukApiKey))) ||
+        // token 選填（優先序：渲染端傳入 > 環境變數 > 設定檔）；沒有就匿名上傳
+        const storedToken =
+          (typeof store?.get === "function" &&
+            (store.get("urusaiToken") || (store.get("upload") && store.get("upload").urusaiToken))) ||
           null;
-        const effectiveKey =
+        const token =
           (apiKey && typeof apiKey === "string" && apiKey.trim()) ||
-          (process.env.DUK_API_KEY && String(process.env.DUK_API_KEY).trim()) ||
-          storedKey ||
-          "duk_REDACTED_OLD_KEY";
+          (process.env.URUSAI_TOKEN && String(process.env.URUSAI_TOKEN).trim()) ||
+          storedToken ||
+          "";
+        if (token) form.append("token", token);
 
-        // 常見服務會檢查這些標頭
-        const baseHeaders = {
-          Referer: "https://duk.tw/",
-          Origin: "https://duk.tw",
+        const headers = {
           Accept: "application/json",
-          "User-Agent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 Dukshot/${app.getVersion?.() || "1.0"}`,
-          "x-api-key": effectiveKey
+          "User-Agent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 DuckShot/${app.getVersion?.() || "1.0"}`,
         };
 
-        const doUpload = (headers) =>
-          fetch("https://duk.tw/api/upload", { method: "POST", headers, body: form });
-
-        // 嘗試：帶標頭
-        let res = await doUpload(baseHeaders);
-
-        // 若 403，再退一步只保留 UA/Accept 與 x-api-key（有些服務不接受自帶 Origin/Referer）
-        if (res.status === 403) {
-          const lighter = {
-            Accept: baseHeaders.Accept,
-            "User-Agent": baseHeaders["User-Agent"],
-            "x-api-key": baseHeaders["x-api-key"],
-          };
-          res = await doUpload(lighter);
-        }
+        const res = await fetch("https://api.urusai.cc/v1/upload", {
+          method: "POST",
+          headers,
+          body: form,
+        });
 
         if (!res.ok) {
           const body = await res.text().catch(() => "");
@@ -1493,13 +1483,11 @@ class DukshotApp {
         }
 
         const json = await res.json().catch(() => ({}));
-        const id = json?.result;
-        const ext = json?.extension || ".png";
-        if (!id) {
-          return { success: false, error: "回應缺少 result" };
+        const url = json?.data?.url_direct;
+        if (json?.status !== "success" || !url) {
+          return { success: false, error: json?.message || "上傳失敗（回應格式不符）", raw: json };
         }
-        const url = `https://duk.tw/${id}${ext}`;
-        return { success: true, url, raw: json };
+        return { success: true, url, deleteUrl: json?.data?.url_delete, raw: json };
       } catch (e) {
         return { success: false, error: e.message };
       }

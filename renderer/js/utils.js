@@ -368,15 +368,17 @@ class Utils {
     });
   }
 
-  // 上傳到 duk.tw（強制回傳 duk.tw 網址）
+  // 上傳到 URUSAI! 圖床（回傳直連網址）。注意：瀏覽器端直接呼叫可能遇 CORS，
+  // 正式上傳請走主進程的 electronAPI.uploadToDuk（IPC 代理）。
   static async uploadToDuk(imageBlob, filename = "screenshot.png") {
     if (!(imageBlob instanceof Blob)) {
       throw new Error("imageBlob 必須為 Blob");
     }
     const form = new FormData();
-    form.append("image", imageBlob, filename);
+    form.append("file", imageBlob, filename);
+    form.append("r18", "0");
 
-    const res = await fetch("https://duk.tw/api/upload", {
+    const res = await fetch("https://api.urusai.cc/v1/upload", {
       method: "POST",
       body: form,
     });
@@ -386,18 +388,15 @@ class Utils {
     }
 
     const json = await res.json();
-    const id = json?.result;
-    const ext = json?.extension || ".png";
-    if (!id) {
-      throw new Error("回應缺少 result");
+    const url = json?.data?.url_direct;
+    if (json?.status !== "success" || !url) {
+      throw new Error(json?.message || "上傳失敗（回應格式不符）");
     }
-    const dukUrl = `https://duk.tw/${id}${ext}`;
     return {
-      id,
-      extension: ext,
-      url: dukUrl,
-      originalUrl: json?.originalUrl || null,
-      provider: json?.provider || null,
+      id: json?.data?.id,
+      url,
+      deleteUrl: json?.data?.url_delete || null,
+      provider: "urusai",
       raw: json
     };
   }
