@@ -25,7 +25,7 @@ class SettingsManager {
     this.originalSettings = {};
     this.recordingShortcut = null;
     this.shortcuts = {
-      region: { default: 'Ctrl+R', current: 'Ctrl+R' },
+      region: { default: 'Alt+A', current: 'Alt+A' },
       fullscreen: { default: 'PrintScreen', current: 'PrintScreen' },
       window: { default: 'Alt+W', current: 'Alt+W' }
     };
@@ -108,7 +108,7 @@ class SettingsManager {
       },
       shortcuts: {
         enabled: true,
-        region: { enabled: true, key: 'Ctrl+R' },
+        region: { enabled: true, key: 'Alt+A' },
         fullscreen: { enabled: true, key: 'PrintScreen' },
         window: { enabled: true, key: 'Alt+W' }
       },

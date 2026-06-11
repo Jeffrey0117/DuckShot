@@ -198,7 +198,7 @@ class ShortcutManager {
     this.shortcuts = new Map();
     this.enabled = true;
     this.defaultKeys = {
-      region: "Ctrl+R",
+      region: "Alt+A",
       fullscreen: "PrintScreen",
       window: "Alt+W"
     };
@@ -338,6 +338,10 @@ class DukshotApp {
   async initialize() {
     // 等待 Electron 準備完成
     await electron.app.whenReady();
+
+    // 移除預設應用選單，避免 Electron 內建快捷鍵（Ctrl+R 重新整理、F5、Ctrl+W 關閉、
+    // Ctrl+Shift+I 開發者工具等）在正式版誤觸。所有截圖快捷鍵改由設定頁自訂。
+    electron.Menu.setApplicationMenu(null);
 
     // 創建主視窗
     this.createMainWindow();

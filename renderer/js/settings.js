@@ -684,7 +684,7 @@ class SettingsManager {
       "setting-show-notifications": this.get("showNotifications"),
 
       // 快捷鍵鍵位（舊：regionCapture/fullScreenCapture/activeWindowCapture；新：shortcuts.region.key 等）
-      "setting-shortcut-region": pickShortcut("shortcuts.regionCapture", "shortcuts.region.key") || "Ctrl+R",
+      "setting-shortcut-region": pickShortcut("shortcuts.regionCapture", "shortcuts.region.key") || "Alt+A",
       "setting-shortcut-fullscreen": pickShortcut("shortcuts.fullScreenCapture", "shortcuts.fullscreen.key") || "PrintScreen",
       "setting-shortcut-window": pickShortcut("shortcuts.activeWindowCapture", "shortcuts.window.key") || "Alt+W",
 
