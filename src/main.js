@@ -136,16 +136,24 @@ const settingsPath = path.join(
 // 設定存儲類別
 class SettingsStore {
   constructor() {
+    // 同步載入設定，確保 app 啟動時（註冊全域快捷鍵前）設定已就緒，
+    // 避免快捷鍵以預設值註冊、要重新儲存設定才生效的問題。
     this.settings = {};
-    this.load();
+    this.loadSync();
   }
 
-  async load() {
+  loadSync() {
     try {
-      const data = await fs.readFile(settingsPath, "utf8");
+      const data = require("fs").readFileSync(settingsPath, "utf8");
       this.settings = JSON.parse(data);
     } catch (error) {
-      this.settings = {
+      this.settings = this.defaultSettings();
+      this.save();
+    }
+  }
+
+  defaultSettings() {
+    return {
         theme: "light",
         autoSave: true,
         screenshotFormat: "png",
@@ -158,8 +166,6 @@ class SettingsStore {
         smoothing: false,         // 預設關閉影像平滑，避免文字模糊
         captureQuality: "highest" // 擷取品質：highest, high, medium
       };
-      await this.save();
-    }
   }
 
   async save() {
@@ -1490,43 +1496,36 @@ class DukshotApp {
     }
 
     try {
-      // 步驟 1: 實施雙重隱身策略，徹底避免主視窗被擷取
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        console.debug("[區域截圖] 步驟1 - 開始雙重隱身前準備");
-        
+      // 只有當主視窗「實際可見」時才需要隱身並等待合成器；
+      // 若主視窗已最小化／在托盤（使用者用全域快捷鍵的常見情況），
+      // 直接擷取即可，省去隱身與等待 → 截圖介面瞬間出現，且事後不會把視窗彈出來。
+      const mw = this.mainWindow;
+      const mainVisible = !!(mw && !mw.isDestroyed() && mw.isVisible() && !mw.isMinimized());
+      this.didHideMainForCapture = false;
+
+      if (mainVisible) {
+        console.debug("[區域截圖] 主視窗可見 - 執行隱身");
+
         // 記錄主視窗原始狀態（供後續還原）
-        this.originalMainWindowBounds = this.mainWindow.getBounds();
-        const wasMaximized = this.mainWindow.isMaximized();
-        const wasMinimized = this.mainWindow.isMinimized();
-        
-        // 儲存額外狀態資訊
+        this.originalMainWindowBounds = mw.getBounds();
         this.originalMainWindowState = {
           bounds: this.originalMainWindowBounds,
-          wasMaximized,
-          wasMinimized
+          wasMaximized: mw.isMaximized(),
+          wasMinimized: mw.isMinimized(),
         };
-        
-        console.debug("[區域截圖] 記錄原始位置:", this.originalMainWindowBounds);
-        
-        // 執行雙重隱身
-        console.debug("[區域截圖] 步驟2 - 執行雙重隱身");
-        
-        // 1) 設定完全透明（不參與 GPU 合成）
-        this.mainWindow.setOpacity(0);
-        console.debug("[區域截圖] - 設定透明度為 0");
-        
-        // 2) 最小化（降低被合成機率）
-        this.mainWindow.minimize();
-        console.debug("[區域截圖] - 最小化視窗");
-        
-        // 3) 移到螢幕外（保險手段，避免 GPU 合成殘留）
-        this.mainWindow.setBounds(HIDE_OFFSCREEN_POS, false);
-        console.debug("[區域截圖] - 移至螢幕外座標");
+
+        // 雙重隱身：透明 + 最小化 + 移到螢幕外
+        mw.setOpacity(0);
+        mw.minimize();
+        mw.setBounds(HIDE_OFFSCREEN_POS, false);
+        this.didHideMainForCapture = true;
+
+        // 等待合成器更新，確保主視窗完全從桌面消失
+        await optimizedSleep(COMPOSITOR_WAIT_TIME_2, "區域截圖-合成器等待");
+      } else {
+        console.debug("[區域截圖] 主視窗不可見 - 跳過隱身與等待，直接擷取");
       }
-      
-      // 步驟 2: 動態等待合成器更新，確保主視窗完全從桌面消失
-      await optimizedSleep(COMPOSITOR_WAIT_TIME_2, "區域截圖-合成器等待");
-      
+
       // 步驟 3: 擷取桌面畫面（此時主視窗應已完全消失）
       console.debug("[區域截圖] 步驟4 - 開始擷取桌面畫面");
       const thumbnailSize = getOptimalThumbnailSize();
@@ -1875,9 +1874,19 @@ class DukshotApp {
   }
 
   restoreMainWindow() {
+    // 若這次截圖並未隱藏主視窗（原本就在托盤／最小化），就不要把它彈出來，
+    // 維持原狀即可。這對應使用者用全域快捷鍵、習慣用貼上的工作流程。
+    if (!this.didHideMainForCapture) {
+      console.debug("[區域截圖] 本次未隱藏主視窗，維持原狀不彈出");
+      this.originalMainWindowBounds = null;
+      this.originalMainWindowState = null;
+      return;
+    }
+    this.didHideMainForCapture = false;
+
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       console.debug("[區域截圖] 開始還原主視窗");
-      
+
       // 還原透明度
       this.mainWindow.setOpacity(1);
       console.debug("[區域截圖] - 還原透明度為 1");
