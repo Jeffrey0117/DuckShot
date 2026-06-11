@@ -149,8 +149,8 @@ class SettingsStore {
         theme: "light",
         autoSave: true,
         screenshotFormat: "png",
-        // 預設儲存到桌面（可在設定中覆蓋）
-        saveDirectory: path.join(os.homedir(), "Desktop"),
+        // 預設儲存到「圖片」資料夾下的 DuckShot 子目錄（可在設定中覆蓋）
+        saveDirectory: path.join(os.homedir(), "Pictures", "DuckShot"),
         // 僅在開發模式且此設定為 true 時才會自動開啟 DevTools
         openDevTools: false,
         // 影像/畫質相關設定
@@ -1705,56 +1705,47 @@ class DukshotApp {
       }
     }
     
-    // 預設使用桌面
+    // 預設使用「圖片」資料夾下的 DuckShot 子目錄
     const homedir = os.homedir();
-    let desktop = path.join(homedir, "Desktop");
-    
-    // Windows 系統特殊處理
+    let picturesBase = path.join(homedir, "Pictures");
+
+    // Windows 系統特殊處理：用 shell API 取得實際「圖片」路徑（含 OneDrive 重新導向）
     if (process.platform === 'win32') {
-      // 嘗試使用 shell API 取得實際桌面路徑
       try {
         const { exec } = require('child_process');
         const util = require('util');
         const execPromise = util.promisify(exec);
-        
-        // 使用 PowerShell 取得桌面路徑
-        const { stdout } = await execPromise('powershell -command "[Environment]::GetFolderPath(\'Desktop\')"');
+
+        const { stdout } = await execPromise('powershell -command "[Environment]::GetFolderPath(\'MyPictures\')"');
         if (stdout && stdout.trim()) {
-          desktop = stdout.trim();
+          picturesBase = stdout.trim();
         }
       } catch (err) {
-        // 如果 PowerShell 失敗，使用預設路徑
-        console.log('[getValidSaveDir] PowerShell desktop path failed, using default');
+        console.log('[getValidSaveDir] PowerShell pictures path failed, using default');
       }
     }
-    
-    try {
-      await fs.access(desktop);
-      return desktop;
-    } catch (e) {
-      console.log(`[getValidSaveDir] Default desktop not accessible: ${desktop}`);
-      
-      // 嘗試其他常見路徑
-      const alternativePaths = [
-        path.join(homedir, "桌面"), // 中文Windows系統
-        path.join(homedir, "OneDrive", "Desktop"), // OneDrive同步的桌面
-        path.join(homedir, "OneDrive", "桌面"),
-        path.join(homedir, "Documents"), // 最後備用：文件資料夾
-      ];
-      
-      for (const altPath of alternativePaths) {
-        try {
-          await fs.access(altPath);
-          console.log(`[getValidSaveDir] Using alternative path: ${altPath}`);
-          return altPath;
-        } catch (err) {
-          continue;
-        }
+
+    // 候選「圖片」基底路徑（含中文與 OneDrive 版本），存在就用其下的 DuckShot 子目錄
+    const baseCandidates = [
+      picturesBase,
+      path.join(homedir, "Pictures"),
+      path.join(homedir, "圖片"), // 中文 Windows 顯示名
+      path.join(homedir, "OneDrive", "Pictures"),
+      path.join(homedir, "OneDrive", "圖片"),
+      path.join(homedir, "Documents"), // 最後備用
+    ];
+
+    for (const base of baseCandidates) {
+      try {
+        await fs.access(base);
+        return path.join(base, "DuckShot");
+      } catch (err) {
+        continue;
       }
     }
-    
-    // 如果所有路徑都無法存取，返回預設桌面路徑（讓系統嘗試建立）
-    return desktop;
+
+    // 都無法存取時，返回預設 圖片/DuckShot（讓系統嘗試建立）
+    return path.join(picturesBase, "DuckShot");
   }
 
   // 取得預設截圖儲存資料夾（同步版本，向下相容）
@@ -1767,8 +1758,8 @@ class DukshotApp {
     ) {
       return configured;
     }
-    // 預設使用桌面
-    return path.join(os.homedir(), "Desktop");
+    // 預設使用「圖片」資料夾下的 DuckShot 子目錄
+    return path.join(os.homedir(), "Pictures", "DuckShot");
   }
 
   createCaptureWindow(screenData = null) {
