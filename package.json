@@ -1,7 +1,7 @@
 {
-  "name": "electron-desktop-app",
+  "name": "duckshot",
   "version": "1.0.0",
-  "description": "Desktop application built with Electron",
+  "description": "DuckShot - 高畫質桌面截圖工具 (Electron)",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -13,20 +13,21 @@
   },
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/Jeffrey0117/DuckShot.git"
   },
   "keywords": [
     "electron",
+    "screenshot",
+    "duckshot",
     "desktop",
-    "application",
-    "cross-platform"
+    "windows"
   ],
-  "author": "Developer",
+  "author": "Jeffrey0117",
   "license": "MIT",
   "bugs": {
-    "url": ""
+    "url": "https://github.com/Jeffrey0117/DuckShot/issues"
   },
-  "homepage": "",
+  "homepage": "https://github.com/Jeffrey0117/DuckShot",
   "devDependencies": {
     "clipboardy": "^4.0.0",
     "electron": "^38.1.2",
@@ -34,19 +35,36 @@
     "electron-store": "^10.1.0"
   },
   "build": {
-    "appId": "com.example.app",
-    "productName": "ElectronApp",
+    "appId": "tw.duk.duckshot",
+    "productName": "DuckShot",
     "directories": {
       "output": "dist"
     },
+    "artifactName": "${productName}-Setup-${version}.${ext}",
     "files": [
       "src/**/*",
+      "renderer/**/*",
       "assets/**/*",
       "package.json"
     ],
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icons/app-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DuckShot"
     },
     "mac": {
       "target": "dmg",

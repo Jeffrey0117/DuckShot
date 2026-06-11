@@ -129,3 +129,10 @@ app/
 .vscode/settings.json
 .idea/
 region-capture-ux-design.md
+# Icon generation preview output
+scripts/preview-*.png
+
+# The legacy "Icon?" rule above also matches our assets/icons/ folder on
+# case-insensitive Windows — explicitly keep the app icons.
+!assets/icons/
+!assets/icons/**
