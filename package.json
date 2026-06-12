@@ -75,5 +75,11 @@
       "target": "AppImage",
       "icon": "assets/icons/app-icon.png"
     }
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@gutenye/ocr-node": "^1.4.8",
+    "jimp": "^1.6.1",
+    "tesseract.js": "^5.1.1"
   }
 }
