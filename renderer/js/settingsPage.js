@@ -177,6 +177,11 @@ class SettingsManager {
       }
     });
 
+    // 一般設定：Gemini API Key（OCR 的 AI 重辨識用）
+    document.getElementById('gemini-api-key').addEventListener('change', (e) => {
+      this.settings.geminiApiKey = e.target.value.trim();
+    });
+
     document.getElementById('open-save-dir').addEventListener('click', async () => {
       try {
         const dir = document.getElementById('save-directory').value;
@@ -232,6 +237,12 @@ class SettingsManager {
 
     // 更新一般設定：顯示目前有效的儲存資料夾
     this.loadSaveDirectory();
+
+    // Gemini API Key
+    const geminiInput = document.getElementById('gemini-api-key');
+    if (geminiInput) {
+      geminiInput.value = this.settings.geminiApiKey || '';
+    }
   }
 
   async loadSaveDirectory() {
