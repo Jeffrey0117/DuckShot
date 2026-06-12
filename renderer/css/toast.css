@@ -5,9 +5,9 @@ html, body { background: #1e1e1e; overflow: hidden; }
 .toast {
   display: flex;
   gap: 10px;
-  align-items: flex-start;
+  align-items: center; /* 右側內容對縮圖垂直置中 */
   width: 100%;
-  padding: 12px;
+  padding: 10px 12px;
   background: #1e1e1e;
   color: #eee;
   font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
@@ -18,19 +18,25 @@ html, body { background: #1e1e1e; overflow: hidden; }
 .toast.fade-out { opacity: 0; }
 
 .thumb {
-  width: 64px;
-  height: 64px;
+  width: 56px;
+  height: 56px;
   object-fit: cover;
   border-radius: 6px;
   background: #222;
   flex-shrink: 0;
 }
 
-.body { flex: 1; min-width: 0; }
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
 
 .message {
   font-size: 13px;
-  margin-bottom: 8px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

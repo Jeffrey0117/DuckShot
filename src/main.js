@@ -376,6 +376,21 @@ class DukshotApp {
     // 等待 Electron 準備完成
     await electron.app.whenReady();
 
+    // 開發驗證用：`electron . --test-toast` 啟動後 4 秒以最近一張截圖觸發分類 toast，
+    // 方便調整 toast 外觀（正常啟動不帶此參數，零影響）
+    if (process.argv.includes("--test-toast")) {
+      setTimeout(async () => {
+        try {
+          const dir = await this.getValidSaveDir();
+          const files = await fs.readdir(dir);
+          const png = files.find((f) => f.toLowerCase().endsWith(".png"));
+          if (png) this.showSortToast(path.join(dir, png));
+        } catch (e) {
+          console.error("test-toast failed:", e);
+        }
+      }, 4000);
+    }
+
     // 移除預設應用選單，避免 Electron 內建快捷鍵（Ctrl+R 重新整理、F5、Ctrl+W 關閉、
     // Ctrl+Shift+I 開發者工具等）在正式版誤觸。所有截圖快捷鍵改由設定頁自訂。
     electron.Menu.setApplicationMenu(null);
