@@ -353,6 +353,7 @@ class DukshotApp {
     this.mainWindow = null;
     this.captureWindow = null;
     this.settingsWindow = null;
+    this.toastWindow = null;
     this.isDebug = process.argv.includes("--dev");
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
@@ -929,6 +930,7 @@ class DukshotApp {
           );
         }
 
+        this.showSortToast(filePath); // fire-and-forget，不阻塞存檔回應
         return { success: true, path: filePath };
       } catch (error) {
         console.error("Error saving screenshot:", error);
@@ -1871,10 +1873,78 @@ class DukshotApp {
       await fs.writeFile(filePath, buffer);
 
       console.log(`Screenshot saved to: ${filePath}`);
+      this.showSortToast(filePath);
       return { success: true, path: filePath };
     } catch (error) {
       console.error("Error saving screenshot:", error);
       return { success: false, error: error.message };
+    }
+  }
+
+  // 存檔成功後顯示右下角快速分類 toast。
+  // galleryTabs 只有預設資料夾（或為空）時不顯示，行為與舊版完全相同。
+  async showSortToast(savedPath) {
+    try {
+      const saveDir = await this.getValidSaveDir();
+      const allTabs = store.get("galleryTabs");
+      const tabs = (Array.isArray(allTabs) ? allTabs : []).filter(
+        (t) =>
+          t &&
+          typeof t.path === "string" &&
+          path.resolve(t.path) !== path.resolve(saveDir)
+      );
+      if (tabs.length === 0) return;
+
+      const payload = {
+        filePath: savedPath,
+        fileName: path.basename(savedPath),
+        defaultName: path.basename(saveDir),
+        tabs,
+      };
+
+      // 單例重用：連續截圖時更新內容、不堆疊
+      if (this.toastWindow && !this.toastWindow.isDestroyed()) {
+        this.toastWindow.webContents.send("toast-data", payload);
+        return;
+      }
+
+      const workArea = electron.screen.getPrimaryDisplay().workArea;
+      const TOAST_W = 340;
+      const TOAST_H = 130;
+      const MARGIN = 16;
+      this.toastWindow = new BrowserWindow({
+        width: TOAST_W,
+        height: TOAST_H,
+        x: workArea.x + workArea.width - TOAST_W - MARGIN,
+        y: workArea.y + workArea.height - TOAST_H - MARGIN,
+        frame: false,
+        transparent: true,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        focusable: false, // 不搶鍵盤焦點，滑鼠仍可點擊
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: path.join(__dirname, "preload.js"),
+        },
+      });
+      this.toastWindow.on("closed", () => {
+        this.toastWindow = null;
+      });
+      await this.toastWindow.loadFile(
+        path.join(__dirname, "../renderer/toast.html")
+      );
+      if (this.toastWindow && !this.toastWindow.isDestroyed()) {
+        this.toastWindow.webContents.send("toast-data", payload);
+        this.toastWindow.showInactive(); // 顯示但不奪焦點
+      }
+    } catch (e) {
+      console.error("showSortToast failed:", e);
     }
   }
 
