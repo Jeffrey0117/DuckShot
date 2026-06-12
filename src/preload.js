@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "toggle-always-on-top",
       "set-always-on-top",
       "toast-data",
+      "toast-moved",
       "ocr-start",
       "ocr-result",
       "ocr-error"
@@ -99,7 +100,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "window-close",
       "toggle-always-on-top",
       "set-always-on-top",
-      "ocr-ready"
+      "ocr-ready",
+      "toast-resize"
     ];
 
     if (validChannels.includes(channel)) {

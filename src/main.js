@@ -127,6 +127,10 @@ const COMPOSITOR_WAIT_TIME_2 = 64; // 雙幀等待時間（更保守）
 // 隱藏視窗時的螢幕外座標
 const HIDE_OFFSCREEN_POS = { x: -10000, y: -10000 };
 
+// 快速分類 toast 視窗尺寸
+const TOAST_WIDTH = 340;
+const TOAST_MARGIN = 16;
+
 // 設定檔案路徑
 const settingsPath = path.join(
   os.homedir(),
@@ -1105,6 +1109,21 @@ class DukshotApp {
         console.error("openOcrResultWindow failed:", e)
       );
       return { success: true };
+    });
+
+    // toast 依內容回報實際高度，視窗貼齊右下角縮放（砍掉多餘空白）
+    ipcMain.on("toast-resize", (event, height) => {
+      if (!this.toastWindow || this.toastWindow.isDestroyed()) return;
+      if (event.sender !== this.toastWindow.webContents) return;
+      const h = Math.max(60, Math.min(400, Math.round(Number(height) || 0)));
+      if (!h) return;
+      const workArea = electron.screen.getPrimaryDisplay().workArea;
+      this.toastWindow.setBounds({
+        x: workArea.x + workArea.width - TOAST_WIDTH - TOAST_MARGIN,
+        y: workArea.y + workArea.height - h - TOAST_MARGIN,
+        width: TOAST_WIDTH,
+        height: h,
+      });
     });
 
     // OCR：結果視窗 renderer 註冊好監聽後通知主進程 flush 緩衝訊息
@@ -2098,19 +2117,18 @@ class DukshotApp {
         if (this.toastWindowLoaded) {
           this.toastWindow.webContents.send("toast-data", this.toastLatestPayload);
         }
+        this.registerToastShortcuts(tabs);
         return;
       }
       this.toastWindowLoaded = false;
 
       const workArea = electron.screen.getPrimaryDisplay().workArea;
-      const TOAST_W = 340;
-      const TOAST_H = 130;
-      const MARGIN = 16;
+      const TOAST_H = 100; // 初始高度，載入後由 toast-resize 依內容調整
       this.toastWindow = new BrowserWindow({
-        width: TOAST_W,
+        width: TOAST_WIDTH,
         height: TOAST_H,
-        x: workArea.x + workArea.width - TOAST_W - MARGIN,
-        y: workArea.y + workArea.height - TOAST_H - MARGIN,
+        x: workArea.x + workArea.width - TOAST_WIDTH - TOAST_MARGIN,
+        y: workArea.y + workArea.height - TOAST_H - TOAST_MARGIN,
         frame: false,
         // 不用 transparent：Windows 上透明視窗以 showInactive 顯示時可能整片不渲染；
         // Win11 對無邊框視窗會自動套圓角，實色背景即可
@@ -2134,6 +2152,7 @@ class DukshotApp {
       this.toastWindow.on("closed", () => {
         this.toastWindow = null;
         this.toastWindowLoaded = false;
+        this.unregisterToastShortcuts();
       });
       try {
         await this.toastWindow.loadFile(
@@ -2149,9 +2168,55 @@ class DukshotApp {
       if (this.toastWindow && !this.toastWindow.isDestroyed()) {
         this.toastWindow.webContents.send("toast-data", this.toastLatestPayload);
         this.toastWindow.showInactive(); // 顯示但不奪焦點
+        this.registerToastShortcuts(tabs);
       }
     } catch (e) {
       console.error("showSortToast failed:", e);
+    }
+  }
+
+  // toast 顯示期間註冊數字鍵 1~9 對應分類資料夾（全鍵盤流程）。
+  // 截圖 overlay 開著時（連續截圖）跳過，避免搶走 overlay 自己的數字鍵。
+  registerToastShortcuts(tabs) {
+    this.unregisterToastShortcuts();
+    if (this.captureWindow && !this.captureWindow.isDestroyed()) return;
+    const count = Math.min(tabs.length, 9);
+    this.toastShortcutKeys = [];
+    for (let i = 0; i < count; i++) {
+      const key = String(i + 1);
+      const tab = tabs[i];
+      try {
+        const ok = globalShortcut.register(key, () => this.moveLatestToTab(i, tab));
+        if (ok) this.toastShortcutKeys.push(key);
+      } catch (e) {
+        console.warn(`[toast] 註冊快捷鍵 ${key} 失敗:`, e.message);
+      }
+    }
+  }
+
+  unregisterToastShortcuts() {
+    (this.toastShortcutKeys || []).forEach((key) => {
+      try { globalShortcut.unregister(key); } catch {}
+    });
+    this.toastShortcutKeys = [];
+  }
+
+  // 數字鍵觸發：把最新存的截圖移到第 index 個分類資料夾
+  async moveLatestToTab(index, tab) {
+    this.unregisterToastShortcuts(); // 防止連按重複搬移
+    const payload = this.toastLatestPayload;
+    if (!payload) return;
+    const notify = (data) => {
+      if (this.toastWindow && !this.toastWindow.isDestroyed() && this.toastWindowLoaded) {
+        this.toastWindow.webContents.send("toast-moved", data);
+      }
+    };
+    try {
+      await moveFile(payload.filePath, tab.path);
+      notify({ success: true, index, name: tab.name });
+    } catch (error) {
+      console.error("moveLatestToTab failed:", error);
+      notify({ success: false, error: error.message });
     }
   }
 
@@ -2226,6 +2291,9 @@ class DukshotApp {
 
   createCaptureWindow(screenData = null) {
     console.debug("[區域截圖] createCaptureWindow() 開始執行");
+
+    // 截圖 overlay 的數字鍵優先，收回 toast 的 1~9 全域快捷鍵
+    this.unregisterToastShortcuts();
     
     // 建立截圖視窗但先不顯示
     this.captureWindow = new BrowserWindow({

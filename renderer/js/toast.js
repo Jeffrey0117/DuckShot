@@ -41,9 +41,7 @@
         tab.path
       );
       if (result && result.success) {
-        btn.textContent = `✓ ${tab.name}`;
-        btn.classList.add("done");
-        setTimeout(() => window.close(), CLOSE_AFTER_MOVE_MS);
+        markMoved(btn, tab.name);
       } else {
         messageEl.textContent = `移動失敗：${(result && result.error) || "未知錯誤"}`;
         messageEl.classList.add("error");
@@ -73,17 +71,53 @@
       .catch(() => {});
 
     tabButtonsEl.innerHTML = "";
-    payload.tabs.forEach((tab) => {
+    payload.tabs.forEach((tab, index) => {
       const btn = document.createElement("button");
       btn.className = "tab-btn";
-      btn.textContent = tab.name;
+      if (index < 9) {
+        const key = document.createElement("span");
+        key.className = "key";
+        key.textContent = String(index + 1);
+        btn.appendChild(key);
+      }
+      btn.appendChild(document.createTextNode(tab.name));
       btn.addEventListener("click", () => onTabClick(tab, btn));
       tabButtonsEl.appendChild(btn);
+    });
+
+    // 依內容實際高度請主進程縮放視窗（砍掉多餘空白）
+    requestAnimationFrame(() => {
+      const height = Math.ceil(toastEl.getBoundingClientRect().height);
+      if (height > 0) window.electronAPI.send("toast-resize", height);
     });
 
     startCloseTimer();
   }
 
+  function markMoved(btn, name) {
+    stopCloseTimer();
+    tabButtonsEl.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    btn.textContent = `✓ ${name}`;
+    btn.classList.add("done");
+    setTimeout(() => window.close(), CLOSE_AFTER_MOVE_MS);
+  }
+
   // 主進程在視窗載入後（與連續截圖每次存檔後）送 toast-data
   window.electronAPI.on("toast-data", (_event, payload) => render(payload));
+
+  // 數字快捷鍵由主進程直接搬檔，這裡只負責顯示結果
+  window.electronAPI.on("toast-moved", (_event, result) => {
+    if (result && result.success) {
+      const btn = tabButtonsEl.children[result.index];
+      if (btn) {
+        markMoved(btn, result.name);
+      } else {
+        setTimeout(() => window.close(), CLOSE_AFTER_MOVE_MS);
+      }
+    } else {
+      messageEl.textContent = `移動失敗：${(result && result.error) || "未知錯誤"}`;
+      messageEl.classList.add("error");
+      startCloseTimer();
+    }
+  });
 })();
