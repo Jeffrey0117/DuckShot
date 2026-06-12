@@ -1,6 +1,6 @@
-* { margin: 0; padding: 0; box-sizing: border-box; }
+/* 存檔後快速分類 toast — 使用 main.css 主題變數，跟隨亮/暗模式 */
 
-html, body { background: #1e1e1e; overflow: hidden; }
+html, body { background: var(--bg-secondary); overflow: hidden; }
 
 .toast {
   display: flex;
@@ -8,8 +8,8 @@ html, body { background: #1e1e1e; overflow: hidden; }
   align-items: center; /* 右側內容對縮圖垂直置中 */
   width: 100%;
   padding: 10px 12px;
-  background: #1e1e1e;
-  color: #eee;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
   opacity: 1;
   transition: opacity 0.25s ease;
@@ -22,7 +22,7 @@ html, body { background: #1e1e1e; overflow: hidden; }
   height: 56px;
   object-fit: cover;
   border-radius: 6px;
-  background: #222;
+  background: var(--bg-tertiary);
   flex-shrink: 0;
 }
 
@@ -37,26 +37,33 @@ html, body { background: #1e1e1e; overflow: hidden; }
 
 .message {
   font-size: 13px;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.message.error { color: #ff8585; white-space: normal; }
+.message.error { color: #e05252; white-space: normal; }
 
 .tab-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .tab-btn {
+  display: inline-flex;
+  align-items: center;
   padding: 4px 10px;
   font-size: 12px;
-  color: #eee;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.tab-btn:hover { background: rgba(255, 255, 255, 0.22); }
+.tab-btn:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
 
 .tab-btn .key {
   display: inline-block;
@@ -66,14 +73,15 @@ html, body { background: #1e1e1e; overflow: hidden; }
   font-size: 10px;
   line-height: 16px;
   text-align: center;
-  color: #ccc;
-  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
   border-radius: 3px;
 }
 
 .tab-btn.done {
-  background: rgba(76, 175, 80, 0.3);
-  border-color: rgba(76, 175, 80, 0.6);
+  background: rgba(58, 167, 87, 0.15);
+  border-color: #3aa757;
+  color: #3aa757;
 }
 
-.tab-btn:disabled { opacity: 0.6; cursor: default; }
+.tab-btn:disabled { opacity: 0.55; cursor: default; }

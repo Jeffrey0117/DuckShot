@@ -11,6 +11,16 @@
   const messageEl = document.getElementById("message");
   const tabButtonsEl = document.getElementById("tabButtons");
 
+  // 跟隨 DuckShot 主題（main.css 變數依 data-theme 切換）
+  (async () => {
+    let theme = "light";
+    try {
+      const settings = await window.electronAPI.settings.get();
+      if (settings && settings.theme) theme = settings.theme;
+    } catch {}
+    document.documentElement.dataset.theme = theme;
+  })();
+
   function startCloseTimer() {
     stopCloseTimer();
     closeTimer = setTimeout(() => {

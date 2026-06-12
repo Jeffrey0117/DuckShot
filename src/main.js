@@ -2139,6 +2139,7 @@ class DukshotApp {
 
       const workArea = electron.screen.getPrimaryDisplay().workArea;
       const TOAST_H = 100; // 初始高度，載入後由 toast-resize 依內容調整
+      const isDarkTheme = store.get("theme") === "dark";
       this.toastWindow = new BrowserWindow({
         width: TOAST_WIDTH,
         height: TOAST_H,
@@ -2146,8 +2147,8 @@ class DukshotApp {
         y: workArea.y + workArea.height - TOAST_H - TOAST_MARGIN,
         frame: false,
         // 不用 transparent：Windows 上透明視窗以 showInactive 顯示時可能整片不渲染；
-        // Win11 對無邊框視窗會自動套圓角，實色背景即可
-        backgroundColor: "#1e1e1e",
+        // Win11 對無邊框視窗會自動套圓角，實色背景即可。背景色跟主題走避免閃色。
+        backgroundColor: isDarkTheme ? "#141414" : "#ffffff",
         resizable: false,
         movable: false,
         minimizable: false,
