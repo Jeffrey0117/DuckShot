@@ -13,6 +13,7 @@ const {
 const path = require("path");
 const fs = require("fs").promises;
 const os = require("os");
+const { moveFile } = require("./lib/moveFile");
 
 // 修復快取問題：禁用GPU快取以避免建立失敗
 app.commandLine.appendSwitch('--disable-gpu-sandbox');
@@ -1026,6 +1027,23 @@ class DukshotApp {
         return { success: true };
       } catch (e) {
         return { success: false, error: e.message };
+      }
+    });
+
+    // 把剛存的截圖搬到分類資料夾（存檔後快速分類 toast 用）
+    ipcMain.handle("move-screenshot", async (_event, filePath, targetDir) => {
+      try {
+        if (typeof filePath !== "string" || !filePath.trim()) {
+          throw new Error("無效的檔案路徑");
+        }
+        if (typeof targetDir !== "string" || !targetDir.trim()) {
+          throw new Error("無效的目標資料夾");
+        }
+        const newPath = await moveFile(filePath, targetDir);
+        return { success: true, path: newPath };
+      } catch (error) {
+        console.error("Error moving screenshot:", error);
+        return { success: false, error: error.message };
       }
     });
 

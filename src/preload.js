@@ -42,6 +42,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // 使用較安全的名稱 remove，並保留 delete 作為別名
     remove: (paths, options) => ipcRenderer.invoke("delete-files", paths, options),
     delete: (paths, options) => ipcRenderer.invoke("delete-files", paths, options),
+    // 存檔後快速分類：把檔案搬到分類資料夾
+    moveScreenshot: (filePath, targetDir) =>
+      ipcRenderer.invoke("move-screenshot", filePath, targetDir),
   },
 
   // 設定 API
@@ -66,7 +69,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "screen-data",
       "more-files-loaded",
       "toggle-always-on-top",
-      "set-always-on-top"
+      "set-always-on-top",
+      "toast-data"
     ];
 
     if (validChannels.includes(channel)) {
