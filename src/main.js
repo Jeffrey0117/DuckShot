@@ -357,6 +357,9 @@ class DukshotApp {
     this.toastWindowLoaded = false;
     this.toastLatestPayload = null;
     this.ocrResultWindow = null;
+    this.ocrWindowReady = false;
+    this.ocrPendingMessages = [];
+    this.ocrRequestId = 0;
     this.isDebug = process.argv.includes("--dev");
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
@@ -1070,16 +1073,50 @@ class DukshotApp {
       }
     });
 
+    // OCR 影像資料上限（base64 字串長度，~48MB 原始圖），防 renderer 餵超大資料
+    const MAX_OCR_IMAGE_CHARS = 64 * 1024 * 1024;
+    const isValidOcrImage = (d) =>
+      typeof d === "string" && d.length > 0 && d.length <= MAX_OCR_IMAGE_CHARS;
+
     // OCR：截圖 overlay 按 5 → 開結果視窗並辨識
     ipcMain.handle("ocr-recognize", async (_event, imageData, screenBounds) => {
-      this.openOcrResultWindow(imageData, screenBounds); // fire-and-forget
+      if (!isValidOcrImage(imageData)) {
+        return { success: false, error: "無效的圖片資料" };
+      }
+      // 在 IPC 信任邊界驗證 screenBounds 形狀（4 個有限數字），不合法就跳過 UIA
+      const b = screenBounds;
+      const validBounds =
+        b && typeof b === "object" &&
+        [b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n))
+          ? { x: b.x, y: b.y, width: b.width, height: b.height }
+          : null;
+      this.openOcrResultWindow(imageData, validBounds).catch((e) =>
+        console.error("openOcrResultWindow failed:", e)
+      );
       return { success: true };
     });
 
     // OCR：結果視窗內重新框選後對子圖重新辨識（子圖沒有螢幕座標，跳過 UIA）
     ipcMain.handle("ocr-recognize-region", async (_event, imageData) => {
-      this.openOcrResultWindow(imageData, null);
+      if (!isValidOcrImage(imageData)) {
+        return { success: false, error: "無效的圖片資料" };
+      }
+      this.openOcrResultWindow(imageData, null).catch((e) =>
+        console.error("openOcrResultWindow failed:", e)
+      );
       return { success: true };
+    });
+
+    // OCR：結果視窗 renderer 註冊好監聽後通知主進程 flush 緩衝訊息
+    ipcMain.on("ocr-ready", (event) => {
+      if (!this.ocrResultWindow || this.ocrResultWindow.isDestroyed()) return;
+      if (event.sender !== this.ocrResultWindow.webContents) return;
+      this.ocrWindowReady = true;
+      const pending = this.ocrPendingMessages;
+      this.ocrPendingMessages = [];
+      pending.forEach(([channel, payload]) =>
+        this.ocrResultWindow.webContents.send(channel, payload)
+      );
     });
 
     // OCR：Gemini 手動重辨識
@@ -1111,10 +1148,16 @@ class DukshotApp {
 
     ipcMain.handle("ocr-is-gemini-available", () => !!store.get("geminiApiKey"));
 
-    // OCR：結果視窗的 🔍 搜尋 / 📷 IG 以預設瀏覽器開啟
+    // OCR：結果視窗的 🔍 搜尋 / 📷 IG 以預設瀏覽器開啟（僅允許已知目標網域）
     ipcMain.handle("ocr-open-external", (_event, url) => {
-      if (typeof url === "string" && /^https:\/\//.test(url)) {
-        shell.openExternal(url);
+      try {
+        const u = new URL(url);
+        const allowedHosts = ["www.google.com", "www.instagram.com"];
+        if (u.protocol === "https:" && allowedHosts.includes(u.hostname)) {
+          shell.openExternal(u.href);
+        }
+      } catch {
+        // 非法 URL 直接忽略
       }
     });
 
@@ -1950,10 +1993,16 @@ class DukshotApp {
     }
   }
 
-  // 開啟（或重用）OCR 結果視窗並開始辨識
+  // 開啟（或重用）OCR 結果視窗並開始辨識。
+  // requestId 防止並發辨識互相覆寫（後發請求為準）；
+  // sendToOcrWindow 的緩衝防止 renderer 尚未註冊監聽就 send（與 toast 相同的競態修法）。
   async openOcrResultWindow(imageData, screenBounds) {
+    this.ocrRequestId += 1;
+    const requestId = this.ocrRequestId;
     try {
       if (!this.ocrResultWindow || this.ocrResultWindow.isDestroyed()) {
+        this.ocrWindowReady = false;
+        this.ocrPendingMessages = [];
         this.ocrResultWindow = new BrowserWindow({
           width: 420,
           height: 560,
@@ -1970,20 +2019,28 @@ class DukshotApp {
         });
         this.ocrResultWindow.on("closed", () => {
           this.ocrResultWindow = null;
+          this.ocrWindowReady = false;
+          this.ocrPendingMessages = [];
         });
-        await this.ocrResultWindow.loadFile(
-          path.join(__dirname, "../renderer/ocrResult.html")
-        );
+        try {
+          await this.ocrResultWindow.loadFile(
+            path.join(__dirname, "../renderer/ocrResult.html")
+          );
+        } catch (loadError) {
+          // 載入失敗：銷毀並重置單例，避免之後送進壞掉的視窗
+          try { this.ocrResultWindow.destroy(); } catch {}
+          this.ocrResultWindow = null;
+          throw loadError;
+        }
       }
-      const win = this.ocrResultWindow;
-      win.show();
-      win.webContents.send("ocr-start", { image: imageData });
+      this.ocrResultWindow.show();
+      this.sendToOcrWindow("ocr-start", { image: imageData });
 
       const { extractText, formatConfidence } = require("./ocr/textExtractor");
       const result = await extractText({ imageData, screenBounds });
-      if (win.isDestroyed()) return;
+      if (requestId !== this.ocrRequestId) return; // 已有更新的辨識請求，丟棄本次結果
       if (result.text) {
-        win.webContents.send("ocr-result", {
+        this.sendToOcrWindow("ocr-result", {
           image: imageData,
           text: result.text,
           method: result.method,
@@ -1991,16 +2048,26 @@ class DukshotApp {
           methodDisplay: formatConfidence(result.method, result.confidence),
         });
       } else {
-        win.webContents.send("ocr-error", { message: "辨識不到文字" });
+        this.sendToOcrWindow("ocr-error", { message: "辨識不到文字" });
       }
     } catch (error) {
       console.error("OCR failed:", error);
-      if (this.ocrResultWindow && !this.ocrResultWindow.isDestroyed()) {
-        this.ocrResultWindow.webContents.send("ocr-error", {
+      if (requestId === this.ocrRequestId) {
+        this.sendToOcrWindow("ocr-error", {
           message: error.message || "OCR failed",
         });
       }
     }
+  }
+
+  // renderer 註冊好監聽（送來 ocr-ready）前先緩衝訊息，ready 後依序 flush
+  sendToOcrWindow(channel, payload) {
+    if (!this.ocrResultWindow || this.ocrResultWindow.isDestroyed()) return;
+    if (!this.ocrWindowReady) {
+      this.ocrPendingMessages.push([channel, payload]);
+      return;
+    }
+    this.ocrResultWindow.webContents.send(channel, payload);
   }
 
   // 存檔成功後顯示右下角快速分類 toast。

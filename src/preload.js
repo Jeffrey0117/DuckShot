@@ -98,7 +98,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "capture-cancelled",
       "window-close",
       "toggle-always-on-top",
-      "set-always-on-top"
+      "set-always-on-top",
+      "ocr-ready"
     ];
 
     if (validChannels.includes(channel)) {

@@ -207,4 +207,7 @@
   window.electronAPI.on("ocr-start", (_e, payload) => showLoading(payload.image));
   window.electronAPI.on("ocr-result", (_e, payload) => showResult(payload));
   window.electronAPI.on("ocr-error", (_e, payload) => showError(payload.message));
+
+  // 監聽都註冊好了，通知主進程可以開始送（避免 loadFile 完成但 script 未跑完的競態）
+  window.electronAPI.send("ocr-ready");
 })();
