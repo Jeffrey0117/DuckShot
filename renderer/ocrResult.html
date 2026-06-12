@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data:; style-src 'self'" />
+  <title>文字辨識 - DuckShot</title>
+  <link rel="stylesheet" href="css/ocrResult.css" />
+</head>
+<body>
+  <div class="result-popup" id="popup">
+    <div class="popup-titlebar">
+      <div class="popup-title-left">
+        <span class="popup-title">文字辨識</span>
+      </div>
+      <div class="popup-controls">
+        <button class="control-btn capture" id="btnCapture" title="再截一張">📷 截圖</button>
+        <button class="control-btn" id="btnPin" title="釘選視窗 (Ctrl+P)">📌 釘選</button>
+        <button class="control-btn" id="btnSettings" title="設定">⚙️ 設定</button>
+        <button class="control-btn close" id="btnClose" title="關閉 (Esc)">✕</button>
+      </div>
+    </div>
+    <div class="popup-content">
+      <div class="result-image" id="imageWrap" style="display:none">
+        <img id="resultImage" alt="Captured" draggable="false" />
+        <div class="crop-overlay" id="cropOverlay" style="display:none"></div>
+        <div class="crop-rect" id="cropRect" style="display:none"></div>
+        <canvas id="cropCanvas" style="display:none"></canvas>
+      </div>
+      <div class="result-loading" id="loading" style="display:none">
+        <div class="spinner"></div><span>辨識中…</span>
+      </div>
+      <div class="result-error" id="errorBox" style="display:none"></div>
+      <div class="result-text-wrapper" id="textWrap" style="display:none">
+        <div class="result-text" id="resultText" contenteditable="true" spellcheck="false"></div>
+      </div>
+      <div class="result-confidence" id="confidence"></div>
+    </div>
+    <div class="popup-actions">
+      <button class="action-btn primary" id="btnCopy" disabled>📋 複製</button>
+      <button class="action-btn" id="btnCrop" disabled title="重新框選辨識範圍">✂️ 裁切</button>
+      <button class="action-btn ai" id="btnAI" disabled title="用 Gemini AI 重新辨識">🤖 AI</button>
+      <button class="action-btn" id="btnSearch" disabled>🔍 搜尋</button>
+      <button class="action-btn instagram" id="btnIG" disabled>📷 IG</button>
+    </div>
+  </div>
+  <script src="js/ocrResult.js"></script>
+</body>
+</html>
