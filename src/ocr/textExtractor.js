@@ -11,6 +11,11 @@ async function extractText(options) {
     throw new Error(`imageData must be a string, got ${typeof imageData}`);
   }
 
+  // PaddleOCR 與 UIA 並行開跑（recognizeWithPaddleOcr 不會 reject，失敗回 {success:false}）：
+  // UIA 有結果就用 UIA，否則直接收割已在跑的 Paddle — 延遲是 max() 而非兩者相加
+  const { recognizeWithPaddleOcr } = require("./paddle");
+  const paddlePromise = recognizeWithPaddleOcr(imageData);
+
   // 1. UI Automation（有螢幕座標才能用；視窗文字元素直讀，100% 準）
   if (tryUIAutomation && screenBounds && process.platform === "win32") {
     try {
@@ -32,8 +37,7 @@ async function extractText(options) {
 
   // 2. PaddleOCR（中文主力；模組內部已有單例 + 並發保護）
   try {
-    const { recognizeWithPaddleOcr } = require("./paddle");
-    const paddleResult = await recognizeWithPaddleOcr(imageData);
+    const paddleResult = await paddlePromise;
     if (paddleResult.success && paddleResult.text.length > 0) {
       const avgConfidence =
         paddleResult.lines.length > 0

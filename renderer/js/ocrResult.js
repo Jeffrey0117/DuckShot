@@ -17,6 +17,16 @@
   let cropEnd = null;
   let isDragging = false;
 
+  // 套用 DuckShot 主題（main.css 的設計變數依 data-theme 切換）
+  (async () => {
+    let theme = "light";
+    try {
+      const settings = await window.electronAPI.settings.get();
+      if (settings && settings.theme) theme = settings.theme;
+    } catch {}
+    document.documentElement.dataset.theme = theme;
+  })();
+
   function setActionsEnabled(enabled) {
     [els.copy, els.crop, els.search, els.ig].forEach((b) => (b.disabled = !enabled));
     window.electronAPI.ocr.isGeminiAvailable().then((ok) => {
@@ -76,10 +86,10 @@
     const text = getCurrentText();
     if (!text) return;
     await window.electronAPI.clipboard.writeText(text);
-    els.copy.textContent = "✓ 已複製";
+    els.copy.textContent = "已複製 ✓";
     els.copy.classList.add("copied");
     setTimeout(() => {
-      els.copy.textContent = "📋 複製";
+      els.copy.textContent = "複製";
       els.copy.classList.remove("copied");
     }, 2000);
   });
@@ -115,7 +125,7 @@
     }
     isEditingCrop = true;
     els.imageWrap.classList.add("editing");
-    els.crop.textContent = "✕ 取消裁切";
+    els.crop.textContent = "取消裁切";
   });
 
   els.imageWrap.addEventListener("mousedown", (e) => {
@@ -161,7 +171,7 @@
     els.imageWrap.classList.remove("editing");
     els.cropOverlay.style.display = "none";
     els.cropRect.style.display = "none";
-    els.crop.textContent = "✂️ 裁切";
+    els.crop.textContent = "裁切";
   }
 
   function applyCrop() {

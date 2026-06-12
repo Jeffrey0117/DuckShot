@@ -2112,7 +2112,9 @@ class DukshotApp {
         x: workArea.x + workArea.width - TOAST_W - MARGIN,
         y: workArea.y + workArea.height - TOAST_H - MARGIN,
         frame: false,
-        transparent: true,
+        // 不用 transparent：Windows 上透明視窗以 showInactive 顯示時可能整片不渲染；
+        // Win11 對無邊框視窗會自動套圓角，實色背景即可
+        backgroundColor: "#1e1e1e",
         resizable: false,
         movable: false,
         minimizable: false,
@@ -2127,6 +2129,8 @@ class DukshotApp {
           preload: path.join(__dirname, "preload.js"),
         },
       });
+      // 比一般 alwaysOnTop 更高的層級，確保蓋過還沒完全關閉的截圖覆蓋層
+      this.toastWindow.setAlwaysOnTop(true, "screen-saver");
       this.toastWindow.on("closed", () => {
         this.toastWindow = null;
         this.toastWindowLoaded = false;

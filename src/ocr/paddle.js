@@ -49,14 +49,16 @@ async function recognizeWithPaddleOcr(imageData) {
     const ocr = await getOcrInstance();
 
     console.log("Running PaddleOCR detection...");
+    // @gutenye/ocr-node 的 detect() 直接回傳 Line[]（{text, mean, box}），
+    // 不是 {lines}（原 Screenshot-OCR 讀 result.lines 永遠拿到空，導致 Paddle 形同虛設）
     const result = await ocr.detect(tempFile);
+    const rawLines = Array.isArray(result) ? result : result?.lines || [];
 
-    const lines =
-      result.lines?.map((line) => ({
-        text: line.text || "",
-        confidence: line.confidence || 0,
-        box: line.frame || { top: 0, left: 0, width: 0, height: 0 },
-      })) || [];
+    const lines = rawLines.map((line) => ({
+      text: line.text || "",
+      confidence: typeof line.mean === "number" ? line.mean : line.confidence || 0,
+      box: line.box || line.frame || { top: 0, left: 0, width: 0, height: 0 },
+    }));
 
     const fullText = lines.map((l) => l.text).join("\n");
 

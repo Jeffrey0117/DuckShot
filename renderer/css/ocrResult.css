@@ -1,364 +1,234 @@
-.result-popup {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
+/* OCR 結果視窗 — 使用 DuckShot 設計變數（main.css），風格對齊設定頁/主視窗 */
+
+html, body {
+  height: 100%;
+  overflow: hidden;
   background: var(--bg-primary);
 }
 
-/* Empty state */
-.empty-content {
-  flex: 1;
+.result-popup {
+  height: 100vh;
   display: flex;
-  justify-content: center;
-  align-items: center;
+  flex-direction: column;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
-.empty-state {
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.empty-icon {
-  font-size: 3rem;
-  margin-bottom: 1rem;
-  opacity: 0.5;
-}
-
-.empty-icon-img {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 1rem;
-  opacity: 0.6;
-}
-
-/* Title bar */
+/* === 標題列（無邊框視窗可拖曳） === */
 .popup-titlebar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: 10px 12px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-color);
   -webkit-app-region: drag;
-}
-
-.popup-title-left {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.popup-logo {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .popup-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .popup-controls {
   display: flex;
-  gap: 0.25rem;
+  align-items: center;
+  gap: 6px;
   -webkit-app-region: no-drag;
 }
 
 .control-btn {
-  height: 28px;
-  padding: 0 0.375rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  background: transparent;
   color: var(--text-secondary);
-  transition: all 0.15s;
-  white-space: nowrap;
-}
-
-.control-btn.close {
-  width: 28px;
-  padding: 0;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-base);
 }
 
 .control-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
 }
 
 .control-btn.active {
-  color: var(--accent);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background: var(--bg-tertiary);
 }
 
 .control-btn.close:hover {
-  background: var(--error);
-  color: white;
+  border-color: #e05252;
+  color: #e05252;
 }
 
-/* Content */
+/* === 內容區 === */
 .popup-content {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 0.75rem;
-  overflow: hidden;
-  -webkit-app-region: no-drag;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
-/* Image preview */
+/* 截圖預覽（可在上面拖選重新辨識） */
 .result-image {
   position: relative;
-  flex-shrink: 0;
-  max-height: 150px;
-  margin-bottom: 0.75rem;
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .result-image img {
+  display: block;
   width: 100%;
-  height: 100%;
+  max-height: 220px;
   object-fit: contain;
 }
 
-/* Editing mode */
 .result-image.editing {
   cursor: crosshair;
-  max-height: 250px;
-}
-
-.result-image.editing img {
-  pointer-events: none;
+  border-color: var(--primary-color);
 }
 
 .crop-overlay {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
 
 .crop-rect {
   position: absolute;
-  border: 2px dashed var(--accent);
-  background: rgba(99, 102, 241, 0.2);
+  border: 2px dashed var(--primary-color);
+  background: rgba(255, 255, 255, 0.08);
   pointer-events: none;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
 }
 
-/* Loading */
+/* 辨識中 */
 .result-loading {
-  flex: 1;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
+  gap: 10px;
+  padding: 16px;
   color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .spinner {
-  width: 24px;
-  height: 24px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--primary-color);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: ocr-spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+@keyframes ocr-spin {
+  to { transform: rotate(360deg); }
 }
 
-/* Error */
+/* 錯誤訊息 */
 .result-error {
-  padding: 0.75rem;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--error);
-  border-radius: var(--radius-sm);
-  color: var(--error);
-  text-align: center;
+  padding: 12px;
+  border: 1px solid rgba(224, 82, 82, 0.4);
+  border-radius: var(--radius-base);
+  background: rgba(224, 82, 82, 0.08);
+  color: #e05252;
+  font-size: 13px;
 }
 
-/* Text result - editable */
+/* 辨識文字（可編輯） */
 .result-text-wrapper {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  position: relative;
 }
 
 .result-text {
   flex: 1;
-  padding: 0.75rem;
+  min-height: 80px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-base);
   background: var(--bg-secondary);
-  border-radius: var(--radius-sm);
-  overflow-y: auto;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  user-select: text;
-  cursor: text;
-  line-height: 1.6;
+  overflow-y: auto;
   outline: none;
-  border: 1px solid transparent;
-  transition: border-color 0.15s, max-height 0.3s;
-  min-height: 60px;
-  max-height: 120px;
-}
-
-.result-text.expanded {
-  max-height: 300px;
-}
-
-.result-text.full-expanded {
-  max-height: none;
+  transition: border-color var(--transition-base);
 }
 
 .result-text:focus {
-  border-color: var(--accent);
+  border-color: var(--primary-color);
 }
 
-.result-text:empty::before {
-  content: attr(data-placeholder);
-  color: var(--text-muted);
-  pointer-events: none;
-}
-
-/* Empty result */
-.result-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-}
-
-/* Expand button */
-.expand-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
-  padding: 0.25rem;
-  margin-top: 0.25rem;
-  font-size: 11px;
-  color: var(--text-muted);
-  background: transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.expand-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-}
-
-/* Confidence */
+/* 辨識方法與信心度 */
 .result-confidence {
-  margin-top: 0.5rem;
   font-size: 12px;
-  color: var(--text-muted);
-  text-align: right;
-}
-
-/* Loading with cancel */
-.loading-actions {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-
-.cancel-btn {
-  padding: 0.375rem 0.75rem;
-  font-size: 12px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  transition: all 0.15s;
+  text-align: right;
+  flex-shrink: 0;
 }
 
-.cancel-btn:hover {
-  background: var(--error);
-  color: white;
-}
-
-/* Actions */
+/* === 動作列 === */
 .popup-actions {
   display: flex;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  border-top: 1px solid var(--border);
-  -webkit-app-region: no-drag;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .action-btn {
   flex: 1;
-  padding: 0.625rem 1rem;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
-  font-weight: 500;
-  transition: all 0.15s;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-base);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-base);
 }
 
 .action-btn:hover:not(:disabled) {
-  background: var(--bg-secondary);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .action-btn.primary {
-  background: var(--accent);
-  color: white;
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: #ffffff;
 }
 
 .action-btn.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  filter: brightness(1.1);
+  color: #ffffff;
 }
 
-.action-btn.copied {
-  background: var(--success);
+.action-btn.primary.copied {
+  background: #3aa757;
+  border-color: #3aa757;
 }
-
-.action-btn.instagram {
-  background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
-  color: white;
-}
-
-.action-btn.instagram:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-/* Selection hint */
-.selection-hint {
-  position: absolute;
-  bottom: 60px;
-  right: 12px;
-  padding: 0.25rem 0.5rem;
-  background: var(--accent);
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  color: white;
-}
-
-.selection-hint.editing-hint {
-  left: 12px;
-  right: auto;
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-}
-
-/* === DuckShot 整合追加（原 app 由全域 index.css 提供的 reset 與無邊框視窗拖曳） === */
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; }
-.popup-titlebar { -webkit-app-region: drag; }
-.popup-titlebar button { -webkit-app-region: no-drag; }
-.result-popup { height: 100vh; display: flex; flex-direction: column; }
