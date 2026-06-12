@@ -526,6 +526,12 @@
         </svg>
         <div class="btn-text">繼續</div>
       </button>
+      <button class="capture-btn" id="ocrBtn" title="文字辨識 OCR (5)">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path d="M5 4h3v2H6v2H4V5c0-.55.45-1 1-1zm14 0c.55 0 1 .45 1 1v3h-2V6h-2V4h3zM6 18h2v2H5c-.55 0-1-.45-1-1v-3h2v2zm14-2v3c0 .55-.45 1-1 1h-3v-2h2v-2h2zM9 8h6v2h-2v6h-2v-6H9V8z" fill="currentColor"/>
+        </svg>
+        <div class="btn-text">文字</div>
+      </button>
       <button class="capture-btn" id="cancelBtn" title="取消 (Esc)">
         <svg viewBox="0 0 24 24" width="18" height="18">
           <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/>
@@ -817,6 +823,7 @@
           document.getElementById('saveBtn').addEventListener('click', () => this.saveScreenshot());
           document.getElementById('uploadBtn').addEventListener('click', () => this.uploadScreenshot());
           document.getElementById('continueBtn').addEventListener('click', () => this.continueCapture());
+          document.getElementById('ocrBtn').addEventListener('click', () => this.ocrScreenshot());
           document.getElementById('cancelBtn').addEventListener('click', () => window.close());
 
           // 右鍵行為（雙右鍵才退出）：
@@ -1125,6 +1132,7 @@
             else if (e.key === '2') { e.preventDefault(); this.saveScreenshot(); }
             else if (e.key === '3') { e.preventDefault(); this.uploadScreenshot(); }
             else if (e.key === '4') { e.preventDefault(); this.continueCapture(); }
+            else if (e.key === '5') { e.preventDefault(); this.ocrScreenshot(); }
           }
         }
 
@@ -1409,6 +1417,38 @@
             await window.electronAPI.capture.continueRegion();
           } catch (error) {
             console.error('繼續截圖失敗:', error);
+          }
+        }
+
+        // 文字辨識：把選取區送主進程 OCR，開結果視窗顯示
+        async ocrScreenshot() {
+          if (!this.selection) return;
+          try {
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = this.selection.width * this.dpr;
+            tempCanvas.height = this.selection.height * this.dpr;
+            tempCtx.imageSmoothingEnabled = false;
+            tempCtx.drawImage(
+              this.canvas,
+              this.selection.x * this.dpr,
+              this.selection.y * this.dpr,
+              this.selection.width * this.dpr,
+              this.selection.height * this.dpr,
+              0, 0, tempCanvas.width, tempCanvas.height
+            );
+            const imageData = tempCanvas.toDataURL('image/png');
+            // UIA 需要螢幕座標：overlay 全螢幕覆蓋，選取座標即螢幕座標（加上視窗原點防多螢幕）
+            const screenBounds = {
+              x: Math.round(window.screenX + this.selection.x),
+              y: Math.round(window.screenY + this.selection.y),
+              width: Math.round(this.selection.width),
+              height: Math.round(this.selection.height),
+            };
+            await window.electronAPI.ocr.recognize(imageData, screenBounds);
+            window.close();
+          } catch (error) {
+            console.error('文字辨識失敗:', error);
           }
         }
 
