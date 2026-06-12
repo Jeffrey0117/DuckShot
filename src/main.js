@@ -354,6 +354,8 @@ class DukshotApp {
     this.captureWindow = null;
     this.settingsWindow = null;
     this.toastWindow = null;
+    this.toastWindowLoaded = false;
+    this.toastLatestPayload = null;
     this.isDebug = process.argv.includes("--dev");
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
@@ -1040,6 +1042,24 @@ class DukshotApp {
         }
         if (typeof targetDir !== "string" || !targetDir.trim()) {
           throw new Error("無效的目標資料夾");
+        }
+        // 來源限定在預設儲存資料夾內、目標限定在 galleryTabs 白名單內，
+        // 避免 renderer 透過此 IPC 搬移任意檔案
+        const saveDir = path.resolve(await this.getValidSaveDir());
+        if (path.dirname(path.resolve(filePath)) !== saveDir) {
+          throw new Error("僅能搬移預設資料夾內的截圖");
+        }
+        const tabs = store.get("galleryTabs");
+        const allowed =
+          Array.isArray(tabs) &&
+          tabs.some(
+            (t) =>
+              t &&
+              typeof t.path === "string" &&
+              path.resolve(t.path) === path.resolve(targetDir)
+          );
+        if (!allowed) {
+          throw new Error("目標資料夾不在圖庫分頁清單中");
         }
         const newPath = await moveFile(filePath, targetDir);
         return { success: true, path: newPath };
@@ -1895,18 +1915,23 @@ class DukshotApp {
       );
       if (tabs.length === 0) return;
 
-      const payload = {
+      // 記住最新 payload：視窗載入完成前若又存了新圖，以最新者為準（最後送達）
+      this.toastLatestPayload = {
         filePath: savedPath,
-        fileName: path.basename(savedPath),
         defaultName: path.basename(saveDir),
         tabs,
       };
 
-      // 單例重用：連續截圖時更新內容、不堆疊
+      // 單例重用：連續截圖時更新內容、不堆疊。
+      // 視窗還在載入中時不直接 send（renderer 尚未註冊監聽），
+      // 載入完成的 callback 會送出 toastLatestPayload。
       if (this.toastWindow && !this.toastWindow.isDestroyed()) {
-        this.toastWindow.webContents.send("toast-data", payload);
+        if (this.toastWindowLoaded) {
+          this.toastWindow.webContents.send("toast-data", this.toastLatestPayload);
+        }
         return;
       }
+      this.toastWindowLoaded = false;
 
       const workArea = electron.screen.getPrimaryDisplay().workArea;
       const TOAST_W = 340;
@@ -1935,12 +1960,21 @@ class DukshotApp {
       });
       this.toastWindow.on("closed", () => {
         this.toastWindow = null;
+        this.toastWindowLoaded = false;
       });
-      await this.toastWindow.loadFile(
-        path.join(__dirname, "../renderer/toast.html")
-      );
+      try {
+        await this.toastWindow.loadFile(
+          path.join(__dirname, "../renderer/toast.html")
+        );
+      } catch (loadError) {
+        // 載入失敗：銷毀並重置單例，避免之後每次存檔都送進壞掉的視窗
+        try { this.toastWindow.destroy(); } catch {}
+        this.toastWindow = null;
+        throw loadError;
+      }
+      this.toastWindowLoaded = true;
       if (this.toastWindow && !this.toastWindow.isDestroyed()) {
-        this.toastWindow.webContents.send("toast-data", payload);
+        this.toastWindow.webContents.send("toast-data", this.toastLatestPayload);
         this.toastWindow.showInactive(); // 顯示但不奪焦點
       }
     } catch (e) {
