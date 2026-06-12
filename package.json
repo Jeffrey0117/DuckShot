@@ -42,6 +42,12 @@
       "output": "dist"
     },
     "artifactName": "${productName}-Setup-${version}.${ext}",
+    "asarUnpack": [
+      "node_modules/@gutenye/ocr-node/**",
+      "node_modules/@gutenye/ocr-common/**",
+      "node_modules/@gutenye/ocr-models/**",
+      "node_modules/onnxruntime-node/**"
+    ],
     "files": [
       "src/**/*",
       "renderer/**/*",
