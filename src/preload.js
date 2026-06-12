@@ -70,7 +70,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "more-files-loaded",
       "toggle-always-on-top",
       "set-always-on-top",
-      "toast-data"
+      "toast-data",
+      "ocr-start",
+      "ocr-result",
+      "ocr-error"
     ];
 
     if (validChannels.includes(channel)) {
@@ -101,6 +104,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
     if (validChannels.includes(channel)) {
       ipcRenderer.send(channel, data);
     }
+  },
+
+  // OCR 文字辨識
+  ocr: {
+    recognize: (imageData, screenBounds) =>
+      ipcRenderer.invoke("ocr-recognize", imageData, screenBounds),
+    recognizeRegion: (imageData) =>
+      ipcRenderer.invoke("ocr-recognize-region", imageData),
+    gemini: (imageData) => ipcRenderer.invoke("ocr-gemini", imageData),
+    togglePin: () => ipcRenderer.invoke("ocr-toggle-pin"),
+    isGeminiAvailable: () => ipcRenderer.invoke("ocr-is-gemini-available"),
+    openExternal: (url) => ipcRenderer.invoke("ocr-open-external", url),
   },
 
   // 由主進程代理上傳到 URUSAI! 圖床（避免 CORS / TLS 攔截）

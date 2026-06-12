@@ -356,6 +356,7 @@ class DukshotApp {
     this.toastWindow = null;
     this.toastWindowLoaded = false;
     this.toastLatestPayload = null;
+    this.ocrResultWindow = null;
     this.isDebug = process.argv.includes("--dev");
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
@@ -1066,6 +1067,54 @@ class DukshotApp {
       } catch (error) {
         console.error("Error moving screenshot:", error);
         return { success: false, error: error.message };
+      }
+    });
+
+    // OCR：截圖 overlay 按 5 → 開結果視窗並辨識
+    ipcMain.handle("ocr-recognize", async (_event, imageData, screenBounds) => {
+      this.openOcrResultWindow(imageData, screenBounds); // fire-and-forget
+      return { success: true };
+    });
+
+    // OCR：結果視窗內重新框選後對子圖重新辨識（子圖沒有螢幕座標，跳過 UIA）
+    ipcMain.handle("ocr-recognize-region", async (_event, imageData) => {
+      this.openOcrResultWindow(imageData, null);
+      return { success: true };
+    });
+
+    // OCR：Gemini 手動重辨識
+    ipcMain.handle("ocr-gemini", async (_event, imageData) => {
+      try {
+        const { extractWithGemini, formatConfidence } = require("./ocr/textExtractor");
+        const apiKey = store.get("geminiApiKey") || "";
+        const result = await extractWithGemini(imageData, apiKey);
+        if (result.text) {
+          return {
+            success: true,
+            text: result.text,
+            methodDisplay: formatConfidence(result.method, result.confidence),
+          };
+        }
+        return { success: false, error: result.error || "辨識不到文字" };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    });
+
+    // OCR：結果視窗釘選切換
+    ipcMain.handle("ocr-toggle-pin", () => {
+      if (!this.ocrResultWindow || this.ocrResultWindow.isDestroyed()) return false;
+      const next = !this.ocrResultWindow.isAlwaysOnTop();
+      this.ocrResultWindow.setAlwaysOnTop(next);
+      return next;
+    });
+
+    ipcMain.handle("ocr-is-gemini-available", () => !!store.get("geminiApiKey"));
+
+    // OCR：結果視窗的 🔍 搜尋 / 📷 IG 以預設瀏覽器開啟
+    ipcMain.handle("ocr-open-external", (_event, url) => {
+      if (typeof url === "string" && /^https:\/\//.test(url)) {
+        shell.openExternal(url);
       }
     });
 
@@ -1898,6 +1947,59 @@ class DukshotApp {
     } catch (error) {
       console.error("Error saving screenshot:", error);
       return { success: false, error: error.message };
+    }
+  }
+
+  // 開啟（或重用）OCR 結果視窗並開始辨識
+  async openOcrResultWindow(imageData, screenBounds) {
+    try {
+      if (!this.ocrResultWindow || this.ocrResultWindow.isDestroyed()) {
+        this.ocrResultWindow = new BrowserWindow({
+          width: 420,
+          height: 560,
+          frame: false,
+          resizable: true,
+          alwaysOnTop: false,
+          skipTaskbar: false,
+          show: false,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, "preload.js"),
+          },
+        });
+        this.ocrResultWindow.on("closed", () => {
+          this.ocrResultWindow = null;
+        });
+        await this.ocrResultWindow.loadFile(
+          path.join(__dirname, "../renderer/ocrResult.html")
+        );
+      }
+      const win = this.ocrResultWindow;
+      win.show();
+      win.webContents.send("ocr-start", { image: imageData });
+
+      const { extractText, formatConfidence } = require("./ocr/textExtractor");
+      const result = await extractText({ imageData, screenBounds });
+      if (win.isDestroyed()) return;
+      if (result.text) {
+        win.webContents.send("ocr-result", {
+          image: imageData,
+          text: result.text,
+          method: result.method,
+          confidence: result.confidence,
+          methodDisplay: formatConfidence(result.method, result.confidence),
+        });
+      } else {
+        win.webContents.send("ocr-error", { message: "辨識不到文字" });
+      }
+    } catch (error) {
+      console.error("OCR failed:", error);
+      if (this.ocrResultWindow && !this.ocrResultWindow.isDestroyed()) {
+        this.ocrResultWindow.webContents.send("ocr-error", {
+          message: error.message || "OCR failed",
+        });
+      }
     }
   }
 
