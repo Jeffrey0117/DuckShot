@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     startWindowCapture: () => ipcRenderer.invoke("start-window-capture"),
     // 繼續截圖（連續模式）：存檔後沿用同一視窗重新擷取桌面
     continueRegion: () => ipcRenderer.invoke("continue-region-capture"),
+    // 視訊流擷取失敗時請主進程改送整張縮圖（後備路徑）
+    requestScreenDataFallback: () => ipcRenderer.invoke("region-capture-fallback"),
     // 可選 label 參數供 A/B 命名使用
     saveScreenshot: (imageData, format, label) =>
       ipcRenderer.invoke("save-screenshot", imageData, format, label),

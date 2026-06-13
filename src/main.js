@@ -367,6 +367,9 @@ class DukshotApp {
     // OCR 流程中跳過主視窗還原，等 OCR 結果視窗關閉才還原
     this.skipNextMainRestore = false;
     this.pendingMainRestoreAfterOcr = false;
+    // 螢幕來源 ID 快取：getSources 即使不抓縮圖也要 200-500ms，
+    // 啟動時與螢幕配置變更時預先快取，按快捷鍵時零等待
+    this.cachedScreenSourceId = null;
     this.isDebug = process.argv.includes("--dev");
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
@@ -378,6 +381,12 @@ class DukshotApp {
   async initialize() {
     // 等待 Electron 準備完成
     await electron.app.whenReady();
+
+    // 預先快取螢幕來源 ID（截圖快捷鍵按下時零等待），螢幕配置變更時刷新
+    this.refreshScreenSourceId();
+    electron.screen.on("display-added", () => this.refreshScreenSourceId());
+    electron.screen.on("display-removed", () => this.refreshScreenSourceId());
+    electron.screen.on("display-metrics-changed", () => this.refreshScreenSourceId());
 
     // 開發驗證用：`electron . --test-toast` 啟動後 4 秒以最近一張截圖觸發分類 toast，
     // 方便調整 toast 外觀（正常啟動不帶此參數，零影響）
@@ -861,6 +870,28 @@ class DukshotApp {
     // 開始區域截圖
     ipcMain.handle("start-region-capture", () => {
       return this.startRegionCapture();
+    });
+
+    // 覆蓋層視訊流擷取失敗時的後備：用舊方法抓整張縮圖送回（慢但穩）
+    ipcMain.handle("region-capture-fallback", async (event) => {
+      try {
+        if (!this.captureWindow || event.sender !== this.captureWindow.webContents) {
+          return { success: false, error: "no capture window" };
+        }
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: getOptimalThumbnailSize(),
+        });
+        if (!sources.length) throw new Error("無法獲取螢幕源");
+        const dataUrl = sources[0].thumbnail.toDataURL();
+        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+          this.captureWindow.webContents.send("screen-data", dataUrl);
+        }
+        return { success: true };
+      } catch (error) {
+        console.error("region-capture-fallback failed:", error);
+        return { success: false, error: error.message };
+      }
     });
 
     // 開始全螢幕截圖
@@ -1831,7 +1862,25 @@ class DukshotApp {
     });
   }
 
+  // 快取主螢幕來源 ID（啟動與螢幕配置變更時呼叫）
+  async refreshScreenSourceId() {
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: { width: 0, height: 0 },
+      });
+      this.cachedScreenSourceId = sources.length > 0 ? sources[0].id : null;
+      console.log("[perf] screen source id cached:", this.cachedScreenSourceId);
+      return this.cachedScreenSourceId;
+    } catch (e) {
+      console.warn("refreshScreenSourceId failed:", e.message);
+      this.cachedScreenSourceId = null;
+      return null;
+    }
+  }
+
   async startRegionCapture() {
+    const tStart = Date.now();
     console.log("Starting region capture...");
     console.debug("[區域截圖] 開始執行 startRegionCapture()");
 
@@ -1874,26 +1923,35 @@ class DukshotApp {
         console.debug("[區域截圖] 主視窗不可見 - 跳過隱身與等待，直接擷取");
       }
 
-      // 步驟 3: 擷取桌面畫面（此時主視窗應已完全消失）
-      console.debug("[區域截圖] 步驟4 - 開始擷取桌面畫面");
-      const thumbnailSize = getOptimalThumbnailSize();
-      console.debug("[區域截圖] 使用擷取尺寸:", thumbnailSize);
-      
-      const sources = await desktopCapturer.getSources({
-        types: ["screen"],
-        thumbnailSize: thumbnailSize,
-      });
-
-      if (sources.length === 0) {
+      // 步驟 3: 取得螢幕來源 ID（優先用啟動時快取的，零等待；沒有才現查），
+      // 實際畫面由覆蓋層用 getUserMedia 視訊流抓第一幀（比 getSources 整張縮圖快 ~700ms）
+      console.debug("[區域截圖] 步驟4 - 取得螢幕來源 ID");
+      let sourceId = this.cachedScreenSourceId;
+      if (!sourceId) {
+        const tGrab = Date.now();
+        sourceId = await this.refreshScreenSourceId();
+        console.log(`[perf] getSources(ids only, uncached): ${Date.now() - tGrab}ms`);
+      }
+      if (!sourceId) {
         throw new Error("無法獲取螢幕源");
       }
 
-      const screenData = sources[0].thumbnail.toDataURL();
-      console.debug("[區域截圖] 步驟5 - 桌面畫面擷取完成");
+      const display = electron.screen.getPrimaryDisplay();
+      const useHiDpi = store.get("highDpiCapture") !== false;
+      const scale = useHiDpi ? display.scaleFactor || 1 : 1;
+      const screenData = {
+        sourceId,
+        width: Math.round(display.size.width * scale),
+        height: Math.round(display.size.height * scale),
+      };
+      console.debug("[區域截圖] 步驟5 - 螢幕來源就緒", screenData);
 
       // 步驟 4: 覆蓋層已並行載入，這裡只需送資料並顯示
       console.debug("[區域截圖] 步驟6 - 顯示截圖視窗");
+      const tShow = Date.now();
       await this.showCaptureWindow(screenData);
+      console.log(`[perf] showCaptureWindow: ${Date.now() - tShow}ms`);
+      console.log(`[perf] region capture total: ${Date.now() - tStart}ms`);
       console.debug("[區域截圖] 截圖視窗已顯示");
 
       return {

@@ -8,7 +8,7 @@
     textWrap: $("textWrap"), text: $("resultText"), confidence: $("confidence"),
     copy: $("btnCopy"), crop: $("btnCrop"), ai: $("btnAI"),
     search: $("btnSearch"), ig: $("btnIG"),
-    capture: $("btnCapture"), pin: $("btnPin"), settings: $("btnSettings"), close: $("btnClose"),
+    capture: $("btnCapture"), pin: $("btnPin"), close: $("btnClose"),
   };
 
   let currentImage = null;
@@ -29,7 +29,9 @@
 
   function setActionsEnabled(enabled) {
     [els.copy, els.crop, els.search, els.ig].forEach((b) => (b.disabled = !enabled));
+    // 沒設 Gemini API key 就整顆藏起來，不留灰按鈕
     window.electronAPI.ocr.isGeminiAvailable().then((ok) => {
+      els.ai.style.display = ok ? "" : "none";
       els.ai.disabled = !enabled || !ok;
     });
   }
@@ -67,10 +69,10 @@
     els.errorBox.textContent = message;
     els.textWrap.style.display = "none";
     setActionsEnabled(false);
-    // 有圖時仍可用 AI 重試（無 key 時 setActionsEnabled 的查詢會把它關回去）
+    // 有圖時仍可用 AI 重試（無 key 時 setActionsEnabled 已把按鈕藏起來）
     if (currentImage) {
       window.electronAPI.ocr.isGeminiAvailable().then((ok) => {
-        els.ai.disabled = !ok;
+        if (ok) els.ai.disabled = false;
       });
     }
   }
@@ -205,7 +207,6 @@
     const pinned = await window.electronAPI.ocr.togglePin();
     els.pin.classList.toggle("active", pinned);
   });
-  els.settings.addEventListener("click", () => window.electronAPI.settings.openWindow());
   els.close.addEventListener("click", () => window.close());
 
   // --- 鍵盤（同原 app：Esc 關閉、Ctrl+C 無選取時複製全文、Ctrl+P 釘選）---
