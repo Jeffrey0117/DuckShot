@@ -89,11 +89,47 @@ function splitRun(run) {
 // 2) 黏在一起的英文單字斷詞
 function fixSpacing(text) {
   if (!text) return text;
-  // 標點後直接接小寫字母 → 補一個空格（小寫幾乎都是漏空格；數字/大寫如 3.14、U.S.A 不動）
-  let out = text.replace(/([.,;:!?])([a-z])/g, "$1 $2");
-  // 逐 token 處理字母串斷詞
+  let out = text;
+  // 1) 連字號折行（exam-\nple → example）
+  out = out.replace(/([A-Za-z])-[ \t]*\n[ \t]*([A-Za-z])/g, "$1$2");
+  // 2) 標點後缺空格：小寫接標點（me,i → me, i）；句點被小寫詞尾接大寫（website.I'm → website. I'm）
+  out = out.replace(/([.,;:!?])([a-z])/g, "$1 $2");
+  out = out.replace(/([a-z][.!?])([A-Z])/g, "$1 $2");
+  // 3) 黏字斷詞
   out = out.replace(/[A-Za-z]+/g, (run) => splitRun(run));
+  // 4) 重新流排：把「排版軟折行」接回連續文字，保留刻意短行（清單/詩句）與段落空行
+  out = dewrap(out);
+  // 5) 收斂多餘空白
+  out = out.replace(/[ \t]{2,}/g, " ");
   return out;
+}
+
+// 重新流排：以空行分段；段內「夠長（接近最寬）的行」視為軟折行 → 與下一行併成空格，
+// 短行視為刻意換行（清單項、標題、詩句）→ 保留。
+function dewrap(text) {
+  return text
+    .split(/\n[ \t]*\n+/)
+    .map((para) => {
+      const lines = para.split(/\n/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length <= 1) return lines.join("");
+      const maxLen = lines.reduce((m, l) => Math.max(m, l.length), 0);
+      const threshold = maxLen * 0.7;
+      const out = [];
+      let cur = "";
+      for (let i = 0; i < lines.length; i++) {
+        cur = cur ? cur + " " + lines[i] : lines[i];
+        const isLast = i === lines.length - 1;
+        const soft = lines[i].length >= threshold; // 夠長 → 視為被排版折斷
+        if (isLast || !soft) {
+          out.push(cur);
+          cur = "";
+        }
+      }
+      if (cur) out.push(cur);
+      return out.join("\n");
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 module.exports = { fixSpacing, splitRun };
