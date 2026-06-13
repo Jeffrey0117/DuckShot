@@ -367,9 +367,10 @@ class DukshotApp {
     // OCR 流程中跳過主視窗還原，等 OCR 結果視窗關閉才還原
     this.skipNextMainRestore = false;
     this.pendingMainRestoreAfterOcr = false;
-    // 螢幕來源 ID 快取：getSources 即使不抓縮圖也要 200-500ms，
-    // 啟動時與螢幕配置變更時預先快取，按快捷鍵時零等待
-    this.cachedScreenSourceId = null;
+    // 螢幕來源 ID 快取（display_id → sourceId）：getSources 即使不抓縮圖也要 200-500ms，
+    // 啟動時與螢幕配置變更時預先快取，按快捷鍵時零等待。多螢幕依游標所在螢幕挑來源。
+    this.cachedScreenSources = null;
+    this.cachedFirstSourceId = null;
     this.isDebug = process.argv.includes("--dev");
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
@@ -1862,21 +1863,37 @@ class DukshotApp {
     });
   }
 
-  // 快取主螢幕來源 ID（啟動與螢幕配置變更時呼叫）
+  // 快取各螢幕的擷取來源 ID（display_id → sourceId），啟動與螢幕配置變更時呼叫。
+  // 多螢幕：按下快捷鍵時依游標所在螢幕挑對應來源。
   async refreshScreenSourceId() {
     try {
       const sources = await desktopCapturer.getSources({
         types: ["screen"],
         thumbnailSize: { width: 0, height: 0 },
       });
-      this.cachedScreenSourceId = sources.length > 0 ? sources[0].id : null;
-      console.log("[perf] screen source id cached:", this.cachedScreenSourceId);
-      return this.cachedScreenSourceId;
+      const map = new Map();
+      for (const s of sources) {
+        if (s.display_id) map.set(String(s.display_id), s.id);
+      }
+      this.cachedScreenSources = map;
+      this.cachedFirstSourceId = sources.length > 0 ? sources[0].id : null;
+      console.log("[perf] screen sources cached:", sources.length, "displays");
+      return map;
     } catch (e) {
       console.warn("refreshScreenSourceId failed:", e.message);
-      this.cachedScreenSourceId = null;
+      this.cachedScreenSources = new Map();
+      this.cachedFirstSourceId = null;
       return null;
     }
+  }
+
+  // 依螢幕 id 取得擷取來源 ID（找不到對應 → 退回第一個來源）
+  getSourceIdForDisplay(displayId) {
+    const key = String(displayId);
+    if (this.cachedScreenSources && this.cachedScreenSources.has(key)) {
+      return this.cachedScreenSources.get(key);
+    }
+    return this.cachedFirstSourceId || null;
   }
 
   async startRegionCapture() {
@@ -1889,9 +1906,14 @@ class DukshotApp {
     }
 
     try {
-      // 並行：立刻開始建立並載入截圖覆蓋層（先不顯示），
+      // 多螢幕：目標螢幕 = 按下快捷鍵當下游標所在的螢幕
+      const cursorPt = electron.screen.getCursorScreenPoint();
+      const targetDisplay = electron.screen.getDisplayNearestPoint(cursorPt);
+      console.debug("[區域截圖] 目標螢幕:", targetDisplay.id, targetDisplay.bounds);
+
+      // 並行：立刻開始建立並載入截圖覆蓋層（先不顯示，建在目標螢幕），
       // 與下面的隱身等待 + desktopCapturer 擷取同時進行，縮短覆蓋層出現時間。
-      this.createCaptureWindow();
+      this.createCaptureWindow(null, targetDisplay);
 
       // 只有當主視窗「實際可見」時才需要隱身並等待合成器；
       // 若主視窗已最小化／在托盤（使用者用全域快捷鍵的常見情況），
@@ -1923,35 +1945,34 @@ class DukshotApp {
         console.debug("[區域截圖] 主視窗不可見 - 跳過隱身與等待，直接擷取");
       }
 
-      // 步驟 3: 取得螢幕來源 ID（優先用啟動時快取的，零等待；沒有才現查），
+      // 步驟 3: 取得「目標螢幕」的來源 ID（優先用啟動時快取的，零等待；沒有才現查），
       // 實際畫面由覆蓋層用 getUserMedia 視訊流抓第一幀（比 getSources 整張縮圖快 ~700ms）
-      console.debug("[區域截圖] 步驟4 - 取得螢幕來源 ID");
-      let sourceId = this.cachedScreenSourceId;
+      console.debug("[區域截圖] 步驟4 - 取得目標螢幕來源 ID");
+      let sourceId = this.getSourceIdForDisplay(targetDisplay.id);
       if (!sourceId) {
         const tGrab = Date.now();
-        sourceId = await this.refreshScreenSourceId();
+        await this.refreshScreenSourceId();
+        sourceId = this.getSourceIdForDisplay(targetDisplay.id);
         console.log(`[perf] getSources(ids only, uncached): ${Date.now() - tGrab}ms`);
       }
       if (!sourceId) {
         throw new Error("無法獲取螢幕源");
       }
 
-      const display = electron.screen.getPrimaryDisplay();
       const useHiDpi = store.get("highDpiCapture") !== false;
-      const scale = useHiDpi ? display.scaleFactor || 1 : 1;
+      const scale = useHiDpi ? targetDisplay.scaleFactor || 1 : 1;
       // 隱藏游標（預設開啟）：覆蓋層套用 CSS cursor:none，硬體游標就不會被串流擷取進畫面，
-      // 改以自訂十字準星輔助對位（準星只是 DOM 疊層，不會進到存檔的 canvas）
+      // 改以鴨鴨指標輔助對位（準星只是 DOM 疊層，不會進到存檔的 canvas）
       const hideCursor = store.get("hideCursor") !== false;
-      // 當下游標螢幕座標 → 轉成覆蓋層的 client 座標（CSS px = DIP），
-      // 讓鴨鴨指標一出現就定位在游標處，而非先閃中央
-      const cursorPt = electron.screen.getCursorScreenPoint();
+      // 游標螢幕座標 → 轉成「目標螢幕覆蓋層」的 client 座標（CSS px = DIP），
+      // 讓鴨鴨指標一出現就定位在游標處
       const screenData = {
         sourceId,
-        width: Math.round(display.size.width * scale),
-        height: Math.round(display.size.height * scale),
+        width: Math.round(targetDisplay.size.width * scale),
+        height: Math.round(targetDisplay.size.height * scale),
         hideCursor,
-        cursorX: cursorPt.x - display.bounds.x,
-        cursorY: cursorPt.y - display.bounds.y,
+        cursorX: cursorPt.x - targetDisplay.bounds.x,
+        cursorY: cursorPt.y - targetDisplay.bounds.y,
       };
       console.debug("[區域截圖] 步驟5 - 螢幕來源就緒", screenData);
 
@@ -2401,16 +2422,17 @@ class DukshotApp {
     return path.join(os.homedir(), "Pictures", "DuckShot");
   }
 
-  createCaptureWindow(screenData = null) {
+  createCaptureWindow(screenData = null, targetDisplay = null) {
     console.debug("[區域截圖] createCaptureWindow() 開始執行");
 
     // 截圖 overlay 的數字鍵優先，收回 toast 的 1~9 全域快捷鍵
     this.unregisterToastShortcuts();
-    
+
     // 建立截圖視窗但先不顯示。
     // 不用 fullscreen:true：Windows 會對全螢幕視窗播放系統縮放動畫（含工作列收合），
     // 改用手動鋪滿螢幕 + screen-saver 置頂（蓋過工作列），出現時零動畫。
-    const overlayBounds = electron.screen.getPrimaryDisplay().bounds;
+    // 多螢幕：鋪滿「目標螢幕」（游標所在），而非永遠主螢幕。
+    const overlayBounds = (targetDisplay || electron.screen.getPrimaryDisplay()).bounds;
     this.captureWindow = new BrowserWindow({
       x: overlayBounds.x,
       y: overlayBounds.y,
