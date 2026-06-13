@@ -1946,6 +1946,20 @@ class DukshotApp {
       };
       console.debug("[區域截圖] 步驟5 - 螢幕來源就緒", screenData);
 
+      // 隱藏游標：覆蓋層尚未顯示前，先並行擷取一張「縮圖路徑」畫面（不含游標），
+      // 稍後用它替換掉視訊流首幀（含游標）。此時覆蓋層仍隱藏 → 擷取到的是乾淨桌面。
+      const hideCursor = store.get("hideCursor") !== false; // 預設開啟
+      let cursorFreePromise = null;
+      if (hideCursor) {
+        cursorFreePromise = desktopCapturer
+          .getSources({ types: ["screen"], thumbnailSize: getOptimalThumbnailSize() })
+          .then((srcs) => (srcs.length ? srcs[0].thumbnail.toDataURL() : null))
+          .catch((e) => {
+            console.warn("[hideCursor] 無游標擷取失敗:", e.message);
+            return null;
+          });
+      }
+
       // 步驟 4: 覆蓋層已並行載入，這裡只需送資料並顯示
       console.debug("[區域截圖] 步驟6 - 顯示截圖視窗");
       const tShow = Date.now();
@@ -1953,6 +1967,16 @@ class DukshotApp {
       console.log(`[perf] showCaptureWindow: ${Date.now() - tShow}ms`);
       console.log(`[perf] region capture total: ${Date.now() - tStart}ms`);
       console.debug("[區域截圖] 截圖視窗已顯示");
+
+      // 無游標畫面就緒後送到覆蓋層替換（不阻塞、不影響出現速度）
+      if (cursorFreePromise) {
+        cursorFreePromise.then((dataUrl) => {
+          if (dataUrl && this.captureWindow && !this.captureWindow.isDestroyed()) {
+            this.captureWindow.webContents.send("screen-data-cursorfree", dataUrl);
+            console.log("[hideCursor] 已送出無游標背景");
+          }
+        });
+      }
 
       return {
         success: true,

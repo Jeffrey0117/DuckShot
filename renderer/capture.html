@@ -653,6 +653,14 @@
               this.loadHighResScreenImage(screenData);
             }
           });
+
+          // 無游標版本就緒：用縮圖路徑（不含游標）的畫面替換掉視訊流首幀（含游標）
+          window.electronAPI.on('screen-data-cursorfree', (_e, dataUrl) => {
+            if (dataUrl) {
+              console.log('替換為無游標背景');
+              this.loadHighResScreenImage(dataUrl, { isSwap: true });
+            }
+          });
         }
 
         // 用 getUserMedia 桌面視訊流抓單幀，畫到 canvas 後立即停止串流
@@ -712,9 +720,9 @@
           }
         }
 
-        loadHighResScreenImage(screenData) {
+        loadHighResScreenImage(screenData, options = {}) {
           const img = new Image();
-          
+
           img.onload = () => {
             console.log('圖片載入完成');
             console.log('圖片原始尺寸:', img.naturalWidth, 'x', img.naturalHeight);
@@ -778,11 +786,16 @@
             
             // 恢復狀態
             this.ctx.restore();
-            
-            // 顯示初始暗覆層
-            this.showInitialDarkOverlay();
+
+            // 無游標版本的背景替換（options.isSwap）：若使用者已在選取，
+            // 只重畫背景、保留現有選取與暗區，不要重設整片暗覆層
+            if (options.isSwap && this.selection) {
+              this.updateDarkAreaPaths();
+            } else {
+              this.showInitialDarkOverlay();
+            }
           };
-          
+
           img.onerror = (error) => {
             console.error('圖片載入失敗:', error);
           };
