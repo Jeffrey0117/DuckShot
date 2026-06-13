@@ -364,6 +364,9 @@ class DukshotApp {
     this.ocrWindowReady = false;
     this.ocrPendingMessages = [];
     this.ocrRequestId = 0;
+    // OCR 流程中跳過主視窗還原，等 OCR 結果視窗關閉才還原
+    this.skipNextMainRestore = false;
+    this.pendingMainRestoreAfterOcr = false;
     this.isDebug = process.argv.includes("--dev");
     this.originalMainWindowBounds = null; // 記錄主視窗原始位置，供還原使用
     this.originalMainWindowState = null; // 記錄主視窗原始狀態
@@ -1116,6 +1119,10 @@ class DukshotApp {
     ipcMain.handle("ocr-recognize", async (_event, imageData, screenBounds) => {
       if (!isValidOcrImage(imageData)) {
         return { success: false, error: "無效的圖片資料" };
+      }
+      // 從截圖 overlay 觸發：overlay 關閉時主視窗先不要跳出來
+      if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+        this.skipNextMainRestore = true;
       }
       // 在 IPC 信任邊界驗證 screenBounds 形狀（4 個有限數字），不合法就跳過 UIA
       const b = screenBounds;
@@ -2054,9 +2061,9 @@ class DukshotApp {
         this.ocrPendingMessages = [];
         this.ocrResultWindow = new BrowserWindow({
           width: 420,
-          height: 460,
+          height: 390,
           minWidth: 360,
-          minHeight: 380,
+          minHeight: 320,
           frame: false,
           resizable: true,
           alwaysOnTop: false,
@@ -2072,6 +2079,11 @@ class DukshotApp {
           this.ocrResultWindow = null;
           this.ocrWindowReady = false;
           this.ocrPendingMessages = [];
+          // OCR 流程結束，把先前被壓住的主視窗還原回來
+          if (this.pendingMainRestoreAfterOcr) {
+            this.pendingMainRestoreAfterOcr = false;
+            this.restoreMainWindow();
+          }
         });
         try {
           await this.ocrResultWindow.loadFile(
@@ -2367,6 +2379,12 @@ class DukshotApp {
       console.debug("[區域截圖] 截圖視窗已關閉，開始還原主視窗");
       this.captureWindow = null;
       this.captureWindowReady = null;
+      // OCR 流程：主視窗先不還原，等 OCR 結果視窗關閉再還原（避免大視窗搶畫面）
+      if (this.skipNextMainRestore) {
+        this.skipNextMainRestore = false;
+        this.pendingMainRestoreAfterOcr = true;
+        return;
+      }
       // 完整還原主視窗狀態
       this.restoreMainWindow();
     });
