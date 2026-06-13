@@ -1942,11 +1942,16 @@ class DukshotApp {
       // 隱藏游標（預設開啟）：覆蓋層套用 CSS cursor:none，硬體游標就不會被串流擷取進畫面，
       // 改以自訂十字準星輔助對位（準星只是 DOM 疊層，不會進到存檔的 canvas）
       const hideCursor = store.get("hideCursor") !== false;
+      // 當下游標螢幕座標 → 轉成覆蓋層的 client 座標（CSS px = DIP），
+      // 讓鴨鴨指標一出現就定位在游標處，而非先閃中央
+      const cursorPt = electron.screen.getCursorScreenPoint();
       const screenData = {
         sourceId,
         width: Math.round(display.size.width * scale),
         height: Math.round(display.size.height * scale),
         hideCursor,
+        cursorX: cursorPt.x - display.bounds.x,
+        cursorY: cursorPt.y - display.bounds.y,
       };
       console.debug("[區域截圖] 步驟5 - 螢幕來源就緒", screenData);
 

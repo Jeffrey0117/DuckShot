@@ -715,6 +715,11 @@
             if (screenData && typeof screenData === 'object' && screenData.hideCursor) {
               this.hideCursorMode = true;
               document.body.classList.add('hide-cursor');
+              // 記錄按下快捷鍵當下的游標座標，讓鴨鴨指標一出現就定位在游標處
+              if (typeof screenData.cursorX === 'number') {
+                this.lastMouseX = screenData.cursorX;
+                this.lastMouseY = screenData.cursorY;
+              }
             }
             if (screenData && typeof screenData === 'object' && screenData.sourceId) {
               this.loadScreenFromStream(screenData);
@@ -875,8 +880,10 @@
             lineH.style.top = y + 'px';
             lineV.style.left = x + 'px';
           };
-          // 初始定位到目前滑鼠位置（避免出現在左上角）
-          place(this.lastMouseX || window.innerWidth / 2, this.lastMouseY || window.innerHeight / 2);
+          // 初始定位到按下快捷鍵當下的游標位置（避免先閃中央再跳過來）
+          const initX = (typeof this.lastMouseX === 'number') ? this.lastMouseX : window.innerWidth / 2;
+          const initY = (typeof this.lastMouseY === 'number') ? this.lastMouseY : window.innerHeight / 2;
+          place(initX, initY);
           document.addEventListener('mousemove', (e) => {
             this.lastMouseX = e.clientX;
             this.lastMouseY = e.clientY;
