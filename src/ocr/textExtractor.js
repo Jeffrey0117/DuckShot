@@ -36,22 +36,31 @@ async function extractText(options) {
   }
 
   // 2. PaddleOCR（中文主力；模組內部已有單例 + 並發保護）
+  let paddleFallback = null;
   try {
     const paddleResult = await paddlePromise;
     if (paddleResult.success && paddleResult.text.length > 0) {
+      const text = paddleResult.text;
       const avgConfidence =
         paddleResult.lines.length > 0
           ? (paddleResult.lines.reduce((sum, l) => sum + l.confidence, 0) /
               paddleResult.lines.length) * 100
           : 90;
-      return { text: paddleResult.text, method: "paddle-ocr", confidence: avgConfidence };
+      // PaddleOCR 是為中文設計，辨識純英文時常把單字黏在一起（缺空格）。
+      // 含中日韓文字 → 直接用 Paddle；純拉丁文字且明顯缺空格 → 改用 Tesseract（空格正確）。
+      if (hasCjk(text) || !looksSpaceDeficient(text)) {
+        return { text, method: "paddle-ocr", confidence: avgConfidence };
+      }
+      console.log("Paddle 結果疑似缺空格的英文，改用 Tesseract");
+      paddleFallback = { text, method: "paddle-ocr", confidence: avgConfidence };
+    } else {
+      console.log("PaddleOCR returned no text, falling back to Tesseract");
     }
-    console.log("PaddleOCR returned no text, falling back to Tesseract");
   } catch (error) {
     console.log("PaddleOCR failed:", error.message);
   }
 
-  // 3. Tesseract fallback（語言檔第一次使用時自 CDN 下載）
+  // 3. Tesseract（語言檔第一次使用時自 CDN 下載；英文空格處理比 Paddle 好）
   try {
     const { initOcr, recognizeImage } = require("./tesseract");
     if (!tesseractInited) {
@@ -59,12 +68,33 @@ async function extractText(options) {
       tesseractInited = true;
     }
     const ocrResult = await recognizeImage(imageData);
-    return { text: ocrResult.text, method: "tesseract", confidence: ocrResult.confidence };
+    if (ocrResult.text && ocrResult.text.trim().length > 0) {
+      return { text: ocrResult.text, method: "tesseract", confidence: ocrResult.confidence };
+    }
   } catch (error) {
     console.error("Tesseract OCR failed:", error.message);
   }
 
+  // Tesseract 沒結果但 Paddle 有（缺空格的英文）→ 退回 Paddle，至少有字
+  if (paddleFallback) return paddleFallback;
+
   return { text: "", method: "none", confidence: 0 };
+}
+
+// 是否含中日韓文字（含則維持 PaddleOCR）
+function hasCjk(text) {
+  return /[㐀-鿿぀-ヿ가-힯]/.test(text);
+}
+
+// 純拉丁文字是否「明顯缺空格」（PaddleOCR 黏字的特徵）
+function looksSpaceDeficient(text) {
+  const letters = (text.match(/[A-Za-z]/g) || []).length;
+  if (letters < 12) return false; // 太短不誤判
+  const spaces = (text.match(/ /g) || []).length;
+  const runs = text.match(/[A-Za-z]+/g) || [];
+  const longestRun = runs.reduce((m, w) => Math.max(m, w.length), 0);
+  // 出現超長無空格字母串，或空格相對字母數明顯偏少 → 視為缺空格
+  return longestRun >= 18 || spaces / letters < 0.08;
 }
 
 // Gemini 手動重辨識（結果視窗 🤖 AI 鈕）
