@@ -1,6 +1,6 @@
 {
   "name": "duckshot",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "DuckShot - 高畫質桌面截圖工具 (Electron)",
   "main": "src/main.js",
   "scripts": {
