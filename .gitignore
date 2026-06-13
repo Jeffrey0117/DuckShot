@@ -136,3 +136,6 @@ scripts/preview-*.png
 # case-insensitive Windows — explicitly keep the app icons.
 !assets/icons/
 !assets/icons/**
+
+# Tesseract OCR language files (downloaded at runtime, not committed)
+*.traineddata
