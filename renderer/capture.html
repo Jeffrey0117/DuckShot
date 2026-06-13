@@ -229,9 +229,9 @@
         transform: scale(1.1);
       }
 
-      /* 幫助文字 */
+      /* 幫助文字（預設隱藏，等畫面就緒後直接顯示在定位，避免早期排版跳動看起來像動畫） */
       .help-text {
-        position: absolute;
+        position: fixed;
         bottom: 30px;
         left: 50%;
         transform: translateX(-50%);
@@ -242,6 +242,8 @@
         font-size: 14px;
         z-index: 1003;
         text-align: center;
+        display: none;
+        white-space: nowrap;
       }
 
       /* 尺寸顯示 */
@@ -793,9 +795,13 @@
           darkAreas.forEach(area => {
             area.style.display = 'block';
           });
-          
+
           // 設定初始全螢幕暗區
           this.updateDarkAreaPaths();
+
+          // 畫面就緒了才顯示底部提示列（直接出現在最終位置，無跳動）
+          const help = document.querySelector('.help-text');
+          if (help && !this.selection) help.style.display = 'block';
         }
 
         setupEventListeners() {
