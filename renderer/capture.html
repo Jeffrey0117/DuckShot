@@ -235,37 +235,48 @@
         cursor: none !important;
       }
 
-      /* 鴨鴨假游標：小鴨跟滑鼠跑 + 精準對位點，純疊層、不會進入存檔畫面 */
+      /* 融合假游標：全螢幕十字對齊線 + 鴨 logo + 精準對位點，純疊層、不進存檔畫面 */
+      .crosshair-line {
+        position: fixed;
+        background: rgba(245, 158, 30, 0.55);
+        z-index: 1004;
+        pointer-events: none;
+        display: none;
+      }
+      .crosshair-line.h { left: 0; width: 100vw; height: 1px; }
+      .crosshair-line.v { top: 0; height: 100vh; width: 1px; }
+      body.hide-cursor.crosshair-active .crosshair-line { display: block; }
+
       .duck-cursor {
         position: fixed;
-        z-index: 1004;
+        z-index: 1005;
         pointer-events: none;
         display: none;
         will-change: left, top;
       }
       body.hide-cursor.crosshair-active .duck-cursor { display: block; }
 
-      /* 精準對位點（真正的截圖起點就在這個點的圓心） */
+      /* 精準對位點（真正的截圖起點就在這個點的圓心，位於十字交叉處） */
       .duck-cursor .aim {
         position: absolute;
-        left: -4px;
-        top: -4px;
-        width: 8px;
-        height: 8px;
-        border: 1.5px solid rgba(255, 170, 0, 0.95);
+        left: -5px;
+        top: -5px;
+        width: 10px;
+        height: 10px;
+        border: 2px solid rgba(245, 158, 30, 0.95);
         border-radius: 50%;
-        background: rgba(255, 255, 255, 0.55);
-        box-shadow: 0 0 4px rgba(0, 0, 0, 0.45);
+        background: rgba(255, 255, 255, 0.5);
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
       }
 
-      /* 小鴨本體（裝飾，偏在對位點的右上，嘴尖朝向對位點） */
-      .duck-cursor .duck {
+      /* 鴨 logo（品牌裝飾，偏在對位點右上，輕輕浮動） */
+      .duck-cursor .duck-img {
         position: absolute;
-        left: 5px;
-        top: -30px;
-        font-size: 24px;
-        line-height: 1;
-        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+        left: 8px;
+        top: -38px;
+        width: 34px;
+        height: 34px;
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
         animation: duck-bob 1.6s ease-in-out infinite;
       }
 
@@ -505,9 +516,11 @@
   <body>
     <div class="help-text">拖曳選區｜Esc 取消｜右鍵重抓/取消｜Enter 儲存｜Ctrl+C 複製</div>
 
-    <!-- 鴨鴨假游標（隱藏游標模式對位用，不會被存進截圖） -->
+    <!-- 融合假游標（隱藏游標模式對位用，不會被存進截圖）：十字線 + 鴨 logo + 對位點 -->
+    <div class="crosshair-line h" id="crosshairH"></div>
+    <div class="crosshair-line v" id="crosshairV"></div>
     <div class="duck-cursor" id="duckCursor">
-      <span class="duck">🦆</span>
+      <img class="duck-img" src="../assets/icons/logo-imgup.png" alt="" draggable="false" />
       <span class="aim"></span>
     </div>
 
@@ -853,15 +866,21 @@
           if (!this.hideCursorMode || this._crosshairOn) return;
           this._crosshairOn = true;
           const duck = document.getElementById('duckCursor');
+          const lineH = document.getElementById('crosshairH');
+          const lineV = document.getElementById('crosshairV');
           document.body.classList.add('crosshair-active');
+          const place = (x, y) => {
+            duck.style.left = x + 'px';
+            duck.style.top = y + 'px';
+            lineH.style.top = y + 'px';
+            lineV.style.left = x + 'px';
+          };
           // 初始定位到目前滑鼠位置（避免出現在左上角）
-          duck.style.left = (this.lastMouseX || window.innerWidth / 2) + 'px';
-          duck.style.top = (this.lastMouseY || window.innerHeight / 2) + 'px';
+          place(this.lastMouseX || window.innerWidth / 2, this.lastMouseY || window.innerHeight / 2);
           document.addEventListener('mousemove', (e) => {
             this.lastMouseX = e.clientX;
             this.lastMouseY = e.clientY;
-            duck.style.left = e.clientX + 'px';
-            duck.style.top = e.clientY + 'px';
+            place(e.clientX, e.clientY);
           });
         }
 
