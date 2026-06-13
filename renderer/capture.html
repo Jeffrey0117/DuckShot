@@ -242,17 +242,20 @@
         z-index: 1004;
         pointer-events: none;
         display: none;
+        will-change: transform;
       }
-      .crosshair-line.h { left: 0; width: 100vw; height: 1px; }
-      .crosshair-line.v { top: 0; height: 100vh; width: 1px; }
+      .crosshair-line.h { left: 0; top: 0; width: 100vw; height: 1px; }
+      .crosshair-line.v { left: 0; top: 0; height: 100vh; width: 1px; }
       body.hide-cursor.crosshair-active .crosshair-line { display: block; }
 
       .duck-cursor {
         position: fixed;
+        top: 0;
+        left: 0;
         z-index: 1005;
         pointer-events: none;
         display: none;
-        will-change: left, top;
+        will-change: transform;
       }
       body.hide-cursor.crosshair-active .duck-cursor { display: block; }
 
@@ -874,20 +877,21 @@
           const lineH = document.getElementById('crosshairH');
           const lineV = document.getElementById('crosshairV');
           document.body.classList.add('crosshair-active');
-          const place = (x, y) => {
-            duck.style.left = x + 'px';
-            duck.style.top = y + 'px';
-            lineH.style.top = y + 'px';
-            lineV.style.left = x + 'px';
+          // 用 transform（GPU 合成、不重排）+ rAF 批次，滑鼠快速移動也不卡
+          let cx = (typeof this.lastMouseX === 'number') ? this.lastMouseX : window.innerWidth / 2;
+          let cy = (typeof this.lastMouseY === 'number') ? this.lastMouseY : window.innerHeight / 2;
+          let pending = false;
+          const apply = () => {
+            pending = false;
+            duck.style.transform = `translate(${cx}px, ${cy}px)`;
+            lineH.style.transform = `translateY(${cy}px)`;
+            lineV.style.transform = `translateX(${cx}px)`;
           };
-          // 初始定位到按下快捷鍵當下的游標位置（避免先閃中央再跳過來）
-          const initX = (typeof this.lastMouseX === 'number') ? this.lastMouseX : window.innerWidth / 2;
-          const initY = (typeof this.lastMouseY === 'number') ? this.lastMouseY : window.innerHeight / 2;
-          place(initX, initY);
+          apply();
           document.addEventListener('mousemove', (e) => {
-            this.lastMouseX = e.clientX;
-            this.lastMouseY = e.clientY;
-            place(e.clientX, e.clientY);
+            cx = this.lastMouseX = e.clientX;
+            cy = this.lastMouseY = e.clientY;
+            if (!pending) { pending = true; requestAnimationFrame(apply); }
           });
         }
 
@@ -1155,6 +1159,17 @@
         }
 
         onMouseMove(e) {
+          // rAF 批次：同一影格內的多個 mousemove 只套用一次 DOM 更新，避免 layout thrashing
+          this._lastMoveEvent = e;
+          if (this._moveScheduled) return;
+          this._moveScheduled = true;
+          requestAnimationFrame(() => {
+            this._moveScheduled = false;
+            if (this._lastMoveEvent) this._processMove(this._lastMoveEvent);
+          });
+        }
+
+        _processMove(e) {
           if (this.isDraggingSelection && this.selection) {
             // 拖曳選取區域時保持 move 游標
             document.body.style.cursor = 'move';
