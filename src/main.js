@@ -391,6 +391,21 @@ class DukshotApp {
       }, 4000);
     }
 
+    // 開發驗證用：`electron . --test-ocr <圖片路徑>` 以指定圖片開啟 OCR 結果視窗
+    const testOcrIdx = process.argv.indexOf("--test-ocr");
+    if (testOcrIdx !== -1 && process.argv[testOcrIdx + 1]) {
+      const testImagePath = process.argv[testOcrIdx + 1];
+      setTimeout(async () => {
+        try {
+          const buf = await fs.readFile(testImagePath);
+          const dataUrl = "data:image/png;base64," + buf.toString("base64");
+          this.openOcrResultWindow(dataUrl, null);
+        } catch (e) {
+          console.error("test-ocr failed:", e);
+        }
+      }, 3000);
+    }
+
     // 移除預設應用選單，避免 Electron 內建快捷鍵（Ctrl+R 重新整理、F5、Ctrl+W 關閉、
     // Ctrl+Shift+I 開發者工具等）在正式版誤觸。所有截圖快捷鍵改由設定頁自訂。
     electron.Menu.setApplicationMenu(null);
@@ -2039,7 +2054,9 @@ class DukshotApp {
         this.ocrPendingMessages = [];
         this.ocrResultWindow = new BrowserWindow({
           width: 420,
-          height: 560,
+          height: 460,
+          minWidth: 360,
+          minHeight: 380,
           frame: false,
           resizable: true,
           alwaysOnTop: false,

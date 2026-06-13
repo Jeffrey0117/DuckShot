@@ -101,9 +101,14 @@
   });
 
   els.ig.addEventListener("click", () => {
-    const text = getCurrentText();
-    if (text) window.electronAPI.ocr.openExternal(
-      "https://www.instagram.com/explore/search/keyword/?q=" + encodeURIComponent(text));
+    // 辨識結果當 IG 帳號用：取第一段文字、去掉 @ 與帳號不允許的字元，直接開個人頁
+    const text = getCurrentText().trim();
+    if (!text) return;
+    const handle = text.split(/\s+/)[0].replace(/^@/, "").replace(/[^\w.]/g, "");
+    if (handle) {
+      window.electronAPI.ocr.openExternal(
+        `https://www.instagram.com/${encodeURIComponent(handle)}/`);
+    }
   });
 
   els.ai.addEventListener("click", async () => {
