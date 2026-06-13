@@ -2398,11 +2398,18 @@ class DukshotApp {
     // 截圖 overlay 的數字鍵優先，收回 toast 的 1~9 全域快捷鍵
     this.unregisterToastShortcuts();
     
-    // 建立截圖視窗但先不顯示
+    // 建立截圖視窗但先不顯示。
+    // 不用 fullscreen:true：Windows 會對全螢幕視窗播放系統縮放動畫（含工作列收合），
+    // 改用手動鋪滿螢幕 + screen-saver 置頂（蓋過工作列），出現時零動畫。
+    const overlayBounds = electron.screen.getPrimaryDisplay().bounds;
     this.captureWindow = new BrowserWindow({
-      fullscreen: true,
+      x: overlayBounds.x,
+      y: overlayBounds.y,
+      width: overlayBounds.width,
+      height: overlayBounds.height,
       frame: false,
       transparent: true,
+      thickFrame: false,
       alwaysOnTop: true,
       show: false, // 先不顯示，等載入完成後再顯示
       resizable: false, // 防止視窗被調整大小
