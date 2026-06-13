@@ -557,8 +557,6 @@
     <!-- 尺寸顯示 -->
     <div class="dimension-display" id="dimensionDisplay" style="display: none;"></div>
 
-    <!-- DPI 診斷資訊 -->
-    <div class="dpi-info" id="dpiInfo"></div>
 
     <!-- 上傳彈窗 -->
     <div class="upload-modal" id="uploadModal">
@@ -619,7 +617,7 @@
           this.selectionBox = document.getElementById('selectionBox');
           this.dimensionDisplay = document.getElementById('dimensionDisplay');
           this.toolbar = document.getElementById('captureToolbar');
-          this.dpiInfo = document.getElementById('dpiInfo');
+          this.dpiInfo = null; // 已移除螢幕上的 DPI 診斷小字（保留下方 console 診斷）
           this.uploadModal = document.getElementById('uploadModal');
           
           // DPI 相關
@@ -656,10 +654,7 @@
           console.log('=== DPI 診斷 ===');
           console.log('Device Pixel Ratio:', this.dpr);
           console.log('螢幕尺寸:', window.screen.width, 'x', window.screen.height);
-          
-          // 顯示 DPI 資訊
-          this.showDPIInfo();
-          
+
           // 設定高解析度畫布
           this.setupHighDPICanvas();
           
