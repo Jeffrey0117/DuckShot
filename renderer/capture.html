@@ -995,20 +995,22 @@
           this.overlay.addEventListener('contextmenu', (e) => {
             e.preventDefault();
 
-            // 有選取 → 只清除，不退出，並重置待退出狀態
+            // 有選取 → 清除選取，並「武裝」待退出：下一次右鍵即關閉（符合提示文字、共 2 次右鍵）
             if (this.selection) {
               this.clearSelection();
-              this.rightClickExitArmed = false;
-              if (this.rightClickArmTimer) {
-                clearTimeout(this.rightClickArmTimer);
+              this.rightClickExitArmed = true;
+              if (this.rightClickArmTimer) clearTimeout(this.rightClickArmTimer);
+              this.rightClickArmTimer = setTimeout(() => {
+                this.rightClickExitArmed = false;
                 this.rightClickArmTimer = null;
-              }
-              // 顯示提示：已取消選取
+                const h = document.querySelector('.help-text');
+                if (h) h.style.display = 'none';
+              }, 1500);
+              // 顯示提示：已取消選取，再按一次右鍵關閉
               const help = document.querySelector('.help-text');
               if (help) {
                 help.textContent = '已取消選取，右鍵再按一次可關閉';
                 help.style.display = 'block';
-                setTimeout(() => { help.style.display = 'none'; }, 1200);
               }
               return;
             }
