@@ -69,7 +69,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "capture-cancelled",
       "settings-updated",
       "screen-data",
-      "screen-data-cursorfree",
       "more-files-loaded",
       "toggle-always-on-top",
       "set-always-on-top",

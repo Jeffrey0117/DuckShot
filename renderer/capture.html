@@ -229,6 +229,24 @@
         transform: scale(1.1);
       }
 
+      /* 隱藏游標模式：覆蓋層不顯示硬體游標（避免被截入畫面），改用自訂十字準星 */
+      body.hide-cursor,
+      body.hide-cursor * {
+        cursor: none !important;
+      }
+
+      /* 自訂十字準星（橫＋直細線），純對位用，不會進入存檔畫面 */
+      .crosshair-line {
+        position: fixed;
+        background: rgba(0, 200, 255, 0.7);
+        z-index: 1004;
+        pointer-events: none;
+        display: none;
+      }
+      .crosshair-line.h { left: 0; width: 100vw; height: 1px; }
+      .crosshair-line.v { top: 0; height: 100vh; width: 1px; }
+      body.hide-cursor.crosshair-active .crosshair-line { display: block; }
+
       /* 幫助文字（預設隱藏，等畫面就緒後直接顯示在定位，避免早期排版跳動看起來像動畫） */
       .help-text {
         position: fixed;
@@ -460,6 +478,10 @@
   <body>
     <div class="help-text">拖曳選區｜Esc 取消｜右鍵重抓/取消｜Enter 儲存｜Ctrl+C 複製</div>
 
+    <!-- 自訂十字準星（隱藏游標模式對位用） -->
+    <div class="crosshair-line h" id="crosshairH"></div>
+    <div class="crosshair-line v" id="crosshairV"></div>
+
     <!-- 背景畫布 -->
     <canvas id="backgroundCanvas"></canvas>
 
@@ -647,18 +669,15 @@
             console.log('接收到螢幕數據');
             // 新路徑：主進程只給 sourceId，由本端用視訊流抓第一幀（快 ~700ms）；
             // 舊路徑（dataURL 字串）保留給連續截圖與 fallback
+            // 隱藏游標模式：覆蓋層套 cursor:none，硬體游標不會被串流截入，改用自訂準星對位
+            if (screenData && typeof screenData === 'object' && screenData.hideCursor) {
+              this.hideCursorMode = true;
+              document.body.classList.add('hide-cursor');
+            }
             if (screenData && typeof screenData === 'object' && screenData.sourceId) {
               this.loadScreenFromStream(screenData);
             } else {
               this.loadHighResScreenImage(screenData);
-            }
-          });
-
-          // 無游標版本就緒：用縮圖路徑（不含游標）的畫面替換掉視訊流首幀（含游標）
-          window.electronAPI.on('screen-data-cursorfree', (_e, dataUrl) => {
-            if (dataUrl) {
-              console.log('替換為無游標背景');
-              this.loadHighResScreenImage(dataUrl, { isSwap: true });
             }
           });
         }
@@ -710,6 +729,7 @@
 
             console.log(`[perf] 視訊流首幀繪製: ${Date.now() - t0}ms`);
             this.showInitialDarkOverlay();
+            this.enableCrosshair(); // 凍結幀已畫好，才開始顯示準星（確保準星不會被截入畫面）
           } catch (error) {
             console.error('視訊流擷取失敗，改用主進程縮圖後備路徑:', error);
             try { await window.electronAPI.capture.requestScreenDataFallback(); } catch (e) {
@@ -720,7 +740,7 @@
           }
         }
 
-        loadHighResScreenImage(screenData, options = {}) {
+        loadHighResScreenImage(screenData) {
           const img = new Image();
 
           img.onload = () => {
@@ -787,20 +807,29 @@
             // 恢復狀態
             this.ctx.restore();
 
-            // 無游標版本的背景替換（options.isSwap）：若使用者已在選取，
-            // 只重畫背景、保留現有選取與暗區，不要重設整片暗覆層
-            if (options.isSwap && this.selection) {
-              this.updateDarkAreaPaths();
-            } else {
-              this.showInitialDarkOverlay();
-            }
+            // 顯示初始暗覆層
+            this.showInitialDarkOverlay();
+            this.enableCrosshair();
           };
 
           img.onerror = (error) => {
             console.error('圖片載入失敗:', error);
           };
-          
+
           img.src = screenData;
+        }
+
+        // 凍結幀畫好後才啟用自訂準星：跟著滑鼠移動，僅在隱藏游標模式顯示
+        enableCrosshair() {
+          if (!this.hideCursorMode || this._crosshairOn) return;
+          this._crosshairOn = true;
+          const h = document.getElementById('crosshairH');
+          const v = document.getElementById('crosshairV');
+          document.body.classList.add('crosshair-active');
+          document.addEventListener('mousemove', (e) => {
+            h.style.top = e.clientY + 'px';
+            v.style.left = e.clientX + 'px';
+          });
         }
 
         showInitialDarkOverlay() {
