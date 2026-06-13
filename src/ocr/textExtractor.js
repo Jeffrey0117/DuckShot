@@ -49,10 +49,10 @@ async function extractText(options) {
       // PaddleOCR 是為中文設計，辨識純英文時常把單字黏在一起（缺空格）。
       // 含中日韓文字 → 直接用 Paddle；純拉丁文字且明顯缺空格 → 改用 Tesseract（空格正確）。
       if (hasCjk(text) || !looksSpaceDeficient(text)) {
-        return { text, method: "paddle-ocr", confidence: avgConfidence };
+        return { text: fixOcrSpacing(text), method: "paddle-ocr", confidence: avgConfidence };
       }
       console.log("Paddle 結果疑似缺空格的英文，改用 Tesseract");
-      paddleFallback = { text, method: "paddle-ocr", confidence: avgConfidence };
+      paddleFallback = { text: fixOcrSpacing(text), method: "paddle-ocr", confidence: avgConfidence };
     } else {
       console.log("PaddleOCR returned no text, falling back to Tesseract");
     }
@@ -69,7 +69,7 @@ async function extractText(options) {
     }
     const ocrResult = await recognizeImage(imageData);
     if (ocrResult.text && ocrResult.text.trim().length > 0) {
-      return { text: ocrResult.text, method: "tesseract", confidence: ocrResult.confidence };
+      return { text: fixOcrSpacing(ocrResult.text), method: "tesseract", confidence: ocrResult.confidence };
     }
   } catch (error) {
     console.error("Tesseract OCR failed:", error.message);
@@ -84,6 +84,17 @@ async function extractText(options) {
 // 是否含中日韓文字（含則維持 PaddleOCR）
 function hasCjk(text) {
   return /[㐀-鿿぀-ヿ가-힯]/.test(text);
+}
+
+// OCR 後處理：純拉丁文字才修空格（黏字斷詞 + 標點後補空格）；含中文不動
+function fixOcrSpacing(text) {
+  if (!text || hasCjk(text)) return text;
+  try {
+    return require("./wordsplit").fixSpacing(text);
+  } catch (e) {
+    console.warn("[ocr] 斷詞失敗，沿用原文字:", e.message);
+    return text;
+  }
 }
 
 // 純拉丁文字是否「明顯缺空格」（PaddleOCR 黏字的特徵）
