@@ -20,11 +20,9 @@ class DukshotApp {
     this.galleryTabs = [];       // 圖庫分頁：[{ name, path }]
     this.saveDir = "";           // 預設截圖儲存資料夾
     this.isFullscreen = false;
-    this.skipNextRefresh = false; // 截圖後避免立即 refresh 把新圖覆蓋掉
     this.lastSelectedIndex = undefined; // 用於 Shift 多選
-    this.lastRefreshTime = 0; // 記錄上次刷新時間，避免頻繁刷新
-    this.lastFilesLoadTime = 0; // 記錄最後檔案載入通知時間，避免重複通知
-    this.pendingThumbnailUpdate = false; // 縮圖批次更新標記
+    this.thumbs = null;          // 視口驅動的縮圖載入器
+    this.watchActive = false;    // 主進程 fs.watch 是否生效
   }
 
   async init() {
@@ -72,6 +70,9 @@ class DukshotApp {
     // 初始化設定管理器
     this.settings = new SettingsManager();
 
+    // 縮圖載入器（要在 UI 建卡片前就緒）
+    this.thumbs = new ThumbnailLoader({ height: 240, concurrency: 2, cacheSize: 400 });
+
     // 初始化檔案管理器
     this.fileManager = new FileManager();
 
@@ -89,23 +90,11 @@ class DukshotApp {
     // 檔案管理器事件
     this.fileManager.on("filesLoaded", (files) => {
       this.ui.updateImageGrid(files);
-      this.ui.updateStatusBar(files.length, files);
-      try {
-        console.log("[App] filesLoaded count:", files?.length ?? -1);
-        // 只在主要載入時顯示通知，避免批次載入時重複通知
-        if (Array.isArray(files) && files.length > 0 && !this.skipNextRefresh) {
-          // 防抖：避免短時間內重複顯示（增加到5秒避免重複）
-          if (!this.lastFilesLoadTime || Date.now() - this.lastFilesLoadTime > 5000) {
-            // 檢查是否還在載入中
-            const isStillLoading = window.electronAPI?.on && this.fileManager.thumbnailQueue?.length > 0;
-            const message = isStillLoading
-              ? `正在載入 ${files.length} 張圖片...`
-              : `已載入 ${files.length} 張圖片`;
-            this.ui.showNotification(message, "success", 1500);
-            this.lastFilesLoadTime = Date.now();
-          }
-        }
-      } catch {}
+    });
+
+    // 刪除/搬走的檔案：釋放其縮圖
+    this.fileManager.on("filesDeleted", (files) => {
+      for (const f of files || []) this.thumbs?.forget(f.id);
     });
 
     this.fileManager.on("fileSelected", (file) => {
@@ -118,51 +107,15 @@ class DukshotApp {
       this.ui.updateSelectionUI(this.selectedImages);
     });
 
-    // 縮圖載入完成時，局部更新單個縮圖（避免整個網格重新渲染）
-    this.fileManager.on("thumbnailLoaded", (file) => {
-      // 只更新單個縮圖，不重新渲染整個網格
-      const item = document.querySelector(`[data-image-id="${file.id}"]`);
-      if (item && file.thumbnail) {
-        const img = item.querySelector("img");
-        const thumbnail = item.querySelector(".file-thumbnail");
-        if (img && thumbnail) {
-          img.src = file.thumbnail;
-          img.style.display = "block";
-          thumbnail.classList.remove("loading");
-        }
-      }
-    });
-
     // 截圖功能事件
     this.capture.on("captureStarted", () => {
       this.ui.showLoading("準備截圖中...");
     });
 
-    this.capture.on("captureCompleted", async (result) => {
+    this.capture.on("captureCompleted", (result) => {
       this.ui.hideLoading();
-      if (result.success) {
-        try {
-          // 若主程序回傳了影像資料，直接加入清單以即時顯示
-          if (result.data) {
-            const filename = this.capture.generateFilename("png");
-            await this.fileManager.addScreenshot(result.data, filename, null, result.path);
-            this.ui.showNotification("截圖完成，已加入清單！", "success");
-          } else {
-            // 沒有影像資料則退而求其次刷新清單（可能使用實體掃描/模擬資料）
-            this.ui.showNotification("截圖完成！", "success");
-            this.fileManager.refresh();
-          }
-          // 確保列表立即同步（補一刀刷新）
-          setTimeout(() => {
-            try { this.fileManager.refresh(); } catch {}
-          }, 300);
-        } catch (e) {
-          console.error("Failed to update UI after capture:", e);
-          this.ui.showNotification("截圖完成，但更新清單失敗", "warning");
-        }
-      } else {
-        this.ui.showNotification("截圖失敗", "error");
-      }
+      if (!result.success) this.ui.showNotification("截圖失敗", "error");
+      // 成功時的通知與清單更新統一由主進程的 capture-completed 事件觸發（避免重複通知）
     });
 
     this.capture.on("captureCancelled", () => {
@@ -170,30 +123,30 @@ class DukshotApp {
       this.ui.showNotification("截圖已取消", "info");
     });
 
-    // 監聽主程序轉送的截圖完成事件（例如區域截圖從 capture.html 儲存後）
+    // 主進程存檔後的通知（區域/全螢幕/視窗截圖都走這裡）：payload 帶 path/id/mtimeMs/size
     if (window.electronAPI?.on) {
       window.electronAPI.on("capture-completed", (_event, payload) => {
         try {
-          const imageData = payload?.data || payload?.imageData;
-          const savedPath = payload?.path;
-          if (imageData) {
-            // 避免 focus 後 refresh 蓋掉剛新增的截圖
-            this.skipNextRefresh = true;
-            const filename = this.capture.generateFilename("png");
-            // 傳入主行程儲存後的實體路徑，讓檔案物件帶有 fsPath
-            this.fileManager.addScreenshot(imageData, filename, null, savedPath);
-            this.ui.showNotification("區域截圖完成，已加入清單！", "success");
-          } else {
-            this.ui.showNotification("區域截圖完成", "success");
+          if (payload?.path) {
+            this.fileManager.addScreenshot(payload);
+            this.ui.showNotification("截圖完成，已加入清單！", "success");
+            // 首次啟動時儲存資料夾可能剛被建立 → 之前掛 watch 失敗，這時再試一次
+            if (!this.watchActive) this.watchCurrentFolder();
           }
-          // 保險刷新一次，確保列表立即反映
-          setTimeout(() => {
-            try { this.fileManager.refresh(); } catch {}
-          }, 300);
         } catch (e) {
           console.error("Failed to handle capture-completed event:", e);
-          this.ui.showNotification("無法更新清單（區域截圖）", "warning");
         }
+      });
+
+      // 主進程 fs.watch：資料夾內容變了（外部刪檔、分類搬移、OneDrive 同步…）就重列
+      window.electronAPI.on("folder-changed", (_event, dir) => {
+        if (dir && dir === this.currentFolder) this.fileManager.refresh();
+      });
+
+      // 監看失效（資料夾被刪、網路磁碟斷線）：退回 focus 刷新
+      window.electronAPI.on("folder-watch-lost", () => {
+        this.watchActive = false;
+        if (this.fileManager) this.fileManager.watchActive = false;
       });
     }
 
@@ -363,7 +316,7 @@ class DukshotApp {
           const icon = maximizeBtn.querySelector('[data-lucide]');
           if (icon) {
             icon.setAttribute('data-lucide', 'minimize-2');
-            window.lucide.createIcons();
+            window.lucide.createIcons({ root: maximizeBtn });
           }
           maximizeBtn.title = '還原';
         });
@@ -373,7 +326,7 @@ class DukshotApp {
           const icon = maximizeBtn.querySelector('[data-lucide]');
           if (icon) {
             icon.setAttribute('data-lucide', 'square');
-            window.lucide.createIcons();
+            window.lucide.createIcons({ root: maximizeBtn });
           }
           maximizeBtn.title = '最大化';
         });
@@ -396,22 +349,10 @@ class DukshotApp {
       }, 100)
     );
 
-    // 視窗焦點事件 - 使用防抖避免頻繁重新載入
+    // 視窗焦點刷新只作為 fs.watch 失效時的後備（watch 生效時資料夾變動會主動通知）
     const debouncedRefresh = Utils.debounce(() => {
-      // 只在真的需要時才重新載入（例如：截圖後跳過一次）
-      if (this.skipNextRefresh) {
-        this.skipNextRefresh = false;
-        console.log("Skipped refresh after screenshot");
-        return;
-      }
-      // 檢查是否真的需要刷新
-      const timeSinceLastRefresh = Date.now() - (this.lastRefreshTime || 0);
-      if (timeSinceLastRefresh > 5000) { // 至少間隔5秒
-        this.fileManager.refresh();
-        this.lastRefreshTime = Date.now();
-      }
-    }, 1000); // 1秒防抖
-
+      if (!this.watchActive) this.fileManager.refresh();
+    }, 1000);
     window.addEventListener("focus", debouncedRefresh);
   }
 
@@ -515,6 +456,7 @@ class DukshotApp {
     // 載入檔案（讓 FileManager 處理所有邏輯）
     try {
       await this.fileManager.loadFolder(this.currentFolder);
+      this.watchCurrentFolder();
     } catch (error) {
       console.error("Failed to load folder:", error);
       this.ui.showNotification("無法載入檔案", "error");
@@ -543,6 +485,17 @@ class DukshotApp {
     }
   }
 
+  // 請主進程監看目前資料夾；失敗就退回 focus 刷新
+  async watchCurrentFolder() {
+    try {
+      const res = await window.electronAPI?.files?.watchFolder?.(this.currentFolder);
+      this.watchActive = !!(res && res.success);
+    } catch {
+      this.watchActive = false;
+    }
+    if (this.fileManager) this.fileManager.watchActive = this.watchActive;
+  }
+
   escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -565,7 +518,7 @@ class DukshotApp {
         </button>`;
       container.appendChild(tab);
     });
-    if (window.lucide) lucide.createIcons();
+    if (window.lucide) lucide.createIcons({ root: container });
   }
 
   setActiveTabUI(folderPath) {
@@ -584,10 +537,10 @@ class DukshotApp {
 
     // 更新主題按鈕圖示
     const themeButton = document.getElementById("btn-theme");
-    const icon = themeButton?.querySelector("i");
+    const icon = themeButton?.querySelector("[data-lucide]");
     if (icon) {
       icon.setAttribute("data-lucide", theme === "light" ? "moon" : "sun");
-      lucide.createIcons();
+      lucide.createIcons({ root: themeButton });
     }
   }
 
@@ -602,8 +555,9 @@ class DukshotApp {
     this.currentFolder = folderPath;
     this.setActiveTabUI(folderPath);
 
-    // 載入該資料夾內容
+    // 載入該資料夾內容，並改監看這個資料夾
     this.fileManager.loadFolder(folderPath);
+    this.watchCurrentFolder();
 
     // 清除選取狀態
     this.clearSelection();

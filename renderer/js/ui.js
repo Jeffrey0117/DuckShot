@@ -39,8 +39,8 @@ class UIManager {
     container.appendChild(notification);
     this.notifications.add(notification);
 
-    // 初始化圖示
-    lucide.createIcons();
+    // 只替這則通知產生圖示，不掃整份文件
+    lucide.createIcons({ root: notification });
 
     // 自動移除
     if (duration > 0) {
@@ -177,8 +177,7 @@ class UIManager {
     overlay.appendChild(modal);
     overlay.style.display = "flex";
 
-    // 初始化圖示
-    lucide.createIcons();
+    lucide.createIcons({ root: modal });
 
     // 點擊背景關閉
     overlay.addEventListener("click", (e) => {
@@ -224,133 +223,81 @@ class UIManager {
     });
   }
 
-  // 更新單個縮圖（避免整個網格重新渲染）
-  updateSingleThumbnail(file) {
-    if (!file || !file.id) return;
-    
-    const item = document.querySelector(`[data-image-id="${file.id}"]`);
-    if (item && file.thumbnail) {
-      const img = item.querySelector("img");
-      const thumbnail = item.querySelector(".file-thumbnail");
-      if (img && thumbnail) {
-        img.src = file.thumbnail;
-        img.style.display = "block";
-        thumbnail.classList.remove("loading");
-      }
-    }
-  }
-
-  // 更新圖片網格 - 同步新增與刪除
+  // 更新圖片網格：依 id 增量同步（新增/移除/換位），不重建既有卡片。
+  // 新截圖會插在正確位置（最前面），而不是永遠貼在尾端。
   updateImageGrid(files) {
-
     const grid = document.getElementById("image-grid");
     const emptyState = document.getElementById("empty-state");
-
     if (!grid || !emptyState) return;
 
     if (files.length === 0) {
       this.showEmptyState();
       return;
     }
-
     emptyState.style.display = "none";
-    
-    // 目標清單 ID 集合
-    const desiredIds = new Set(files.map(f => f.id));
 
-    // 收集現有的卡片 ID
-    const existingCards = new Map();
-    grid.querySelectorAll(".file-item").forEach(card => {
+    const thumbs = window.DukshotApp?.thumbs;
+    const existing = new Map();
+    for (const card of Array.from(grid.children)) {
       const id = card.dataset.imageId;
-      if (id) {
-        existingCards.set(id, card);
-      }
-    });
-    
-    // 移除已不存在的卡片
-    let removedCount = 0;
-    existingCards.forEach((card, id) => {
-      if (!desiredIds.has(id)) {
-        card.remove();
-        removedCount++;
-      }
-    });
-
-    // 使用 DocumentFragment 提高效能
-    const fragment = document.createDocumentFragment();
-    let newCardsAdded = 0;
-    
-    // 只添加新的卡片
-    files.forEach((file) => {
-      if (!existingCards.has(file.id)) {
-        const card = this.createImageCard(file);
-        fragment.appendChild(card);
-        newCardsAdded++;
-      }
-    });
-
-    // 一次性添加所有新卡片
-    if (newCardsAdded > 0) {
-      grid.appendChild(fragment);
-      
-      // 初始化圖示
-      lucide.createIcons();
+      if (id) existing.set(id, card);
     }
 
-    // 記錄同步結果
-    console.log(`[UI] 同步完成：新增 ${newCardsAdded}、移除 ${removedCount}，現在共 ${files.length} 張`);
+    const desired = new Set(files.map((f) => f.id));
+    let removed = 0;
+    for (const [id, card] of existing) {
+      if (!desired.has(id)) {
+        thumbs?.unobserve(card);
+        card.remove();
+        existing.delete(id);
+        removed += 1;
+      }
+    }
 
-    // 同步狀態列
-    try {
-      this.updateStatusBar(files.length, files);
-      setTimeout(() => this.updateStatusBar(files.length, files), 150);
-    } catch {}
+    let added = 0;
+    files.forEach((file, index) => {
+      let card = existing.get(file.id);
+      if (!card) {
+        card = this.createImageCard(file);
+        added += 1;
+      }
+      const ref = grid.children[index] || null;
+      if (ref !== card) grid.insertBefore(card, ref);
+    });
+
+    if (added || removed) {
+      console.log(`[UI] 同步：新增 ${added}、移除 ${removed}，共 ${files.length} 張`);
+    }
+    this.updateStatusBar(files.length, files);
   }
 
   createImageCard(file) {
     const item = document.createElement("div");
     item.className = "file-item";
     item.dataset.imageId = file.id;
-
     item.innerHTML = `
-      <div class="file-thumbnail${file.thumbnail ? '' : ' loading'}">
-        <img src="" alt="${file.name}" loading="lazy" ${file.thumbnail ? '' : 'style="display: none;"'}>
+      <div class="file-thumbnail loading">
+        <img alt="" draggable="false" style="display: none;">
       </div>
-      <div class="file-name" title="${file.name}">${this.formatFileName(file.name)}</div>
+      <div class="file-name"></div>
     `;
-    // 正規化圖片來源，確保本機路徑轉為 file:/// 並編碼 - 修正：正確處理中文路徑
-    try {
-      const raw = file.thumbnail || file.path || "";
-      let finalSrc = "";
-      
-      if (typeof raw === "string" && raw.length > 0) {
-        if (raw.startsWith("data:") || raw.startsWith("file://")) {
-          // 已經是 data URL 或 file URL，直接使用
-          finalSrc = raw;
-        } else {
-          // 需要轉換為 file:/// URL
-          const normalized = raw.replace(/\\/g, "/");
-          // 正確編碼每個路徑段
-          const segments = normalized.split("/");
-          const encoded = segments.map(seg => encodeURIComponent(seg)).join("/");
-          finalSrc = "file:///" + encoded;
-        }
-      }
-      
-      const imgEl = item.querySelector("img");
-      if (imgEl && finalSrc) {
-        imgEl.src = finalSrc;
-      }
-    } catch (err) {
-      console.warn("[UI] Failed to set image src:", err, "for file:", file.name);
+    const nameEl = item.querySelector(".file-name");
+    nameEl.textContent = this.formatFileName(file.name);
+    nameEl.title = file.name;
+
+    // 縮圖：進視口才由 ThumbnailLoader 產生（老機器不會一次解碼整個資料夾）
+    const img = item.querySelector("img");
+    const thumbs = window.DukshotApp?.thumbs;
+    if (thumbs) {
+      thumbs.observe(item, file, img);
+    } else {
+      img.src = file.path;
+      img.style.display = "block";
+      item.querySelector(".file-thumbnail").classList.remove("loading");
     }
 
-    // 設置事件監聽器
     this.setupFileItemEvents(item, file);
-
-    // 將檔案資料附加到元素上以便之後存取
     item._fileData = file;
-
     return item;
   }
 
@@ -377,30 +324,6 @@ class UIManager {
       this.showImageContextMenu(e.clientX, e.clientY, file);
     });
 
-    // 圖片載入完成處理
-    const img = item.querySelector("img");
-    if (img) {
-      img.addEventListener("load", () => {
-        const thumbnail = item.querySelector(".file-thumbnail");
-        if (thumbnail) {
-          thumbnail.classList.remove("loading");
-          img.style.display = "block";
-        }
-      });
-
-      img.addEventListener("error", () => {
-        const thumbnail = item.querySelector(".file-thumbnail");
-        if (thumbnail) {
-          thumbnail.classList.remove("loading");
-          thumbnail.innerHTML = `
-            <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary);">
-              <i data-lucide="image" class="icon"></i>
-            </div>
-          `;
-          lucide.createIcons();
-        }
-      });
-    }
   }
 
   // Windows 風格的多選處理
@@ -646,7 +569,7 @@ class UIManager {
     });
 
     document.body.appendChild(menu);
-    lucide.createIcons();
+    lucide.createIcons({ root: menu });
 
     // 點擊其他地方關閉選單
     const closeMenu = (e) => {
@@ -669,6 +592,7 @@ class UIManager {
     const grid = document.getElementById("image-grid");
     const emptyState = document.getElementById("empty-state");
 
+    window.DukshotApp?.thumbs?.reset();
     if (grid) grid.innerHTML = "";
     if (emptyState) emptyState.style.display = "flex";
   }
@@ -721,10 +645,10 @@ class UIManager {
   updateThemeIcon(theme) {
     const themeButton = document.getElementById("btn-theme");
     if (themeButton) {
-      const icon = themeButton.querySelector("i");
+      const icon = themeButton.querySelector("[data-lucide]");
       if (icon) {
         icon.setAttribute("data-lucide", theme === "light" ? "moon" : "sun");
-        lucide.createIcons();
+        lucide.createIcons({ root: themeButton });
       }
     }
   }

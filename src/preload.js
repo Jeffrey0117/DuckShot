@@ -26,9 +26,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     continueRegion: () => ipcRenderer.invoke("continue-region-capture"),
     // 視訊流擷取失敗時請主進程改送整張縮圖（後備路徑）
     requestScreenDataFallback: () => ipcRenderer.invoke("region-capture-fallback"),
-    // 可選 label 參數供 A/B 命名使用
+    // imageData 可為 data URL 字串或 PNG 位元組（ArrayBuffer/Uint8Array，免 base64）
     saveScreenshot: (imageData, format, label) =>
       ipcRenderer.invoke("save-screenshot", imageData, format, label),
+    // 覆蓋層關閉：視窗常駐只隱藏，主進程負責還原主視窗
+    dismiss: (reason) => ipcRenderer.send("capture-dismiss", reason),
   },
 
   // 檔案系統 API
@@ -47,6 +49,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // 存檔後快速分類：把檔案搬到分類資料夾
     moveScreenshot: (filePath, targetDir) =>
       ipcRenderer.invoke("move-screenshot", filePath, targetDir),
+    // 監看資料夾變動（主進程 fs.watch → "folder-changed" 事件）
+    watchFolder: (dir) => ipcRenderer.invoke("watch-folder", dir),
   },
 
   // 設定 API
@@ -76,7 +80,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "toast-moved",
       "ocr-start",
       "ocr-result",
-      "ocr-error"
+      "ocr-error",
+      "folder-changed",
+      "folder-watch-lost",
+      "capture-reset"
     ];
 
     if (validChannels.includes(channel)) {
@@ -103,7 +110,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "toggle-always-on-top",
       "set-always-on-top",
       "ocr-ready",
-      "toast-resize"
+      "toast-resize",
+      "capture-dismiss",
+      "capture-drawn"
     ];
 
     if (validChannels.includes(channel)) {
@@ -129,7 +138,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 由主進程寫入剪貼簿（不需視窗焦點，避免 "Document is not focused"）
   clipboard: {
     writeText: (text) => ipcRenderer.invoke("clipboard-write-text", text),
-    writeImage: (dataUrl) => ipcRenderer.invoke("clipboard-write-image", dataUrl),
+    // 接受 data URL 或 PNG 位元組
+    writeImage: (image) => ipcRenderer.invoke("clipboard-write-image", image),
   },
 });
 

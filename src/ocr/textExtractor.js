@@ -4,20 +4,32 @@
 //       app 啟動與不使用 OCR 時零成本。
 let tesseractInited = false;
 
+// Paddle 冷啟動時先讓 UIA 跑多久再開 Paddle（ms）
+const PADDLE_COLD_DELAY_MS = 1500;
+
 async function extractText(options) {
-  const { imageData, screenBounds, tryUIAutomation = true } = options;
+  const { imageData, screenBounds, tryUIAutomation = true, paddleDelayMs = PADDLE_COLD_DELAY_MS } = options;
 
   if (typeof imageData !== "string") {
     throw new Error(`imageData must be a string, got ${typeof imageData}`);
   }
 
-  // PaddleOCR 與 UIA 並行開跑（recognizeWithPaddleOcr 不會 reject，失敗回 {success:false}）：
-  // UIA 有結果就用 UIA，否則直接收割已在跑的 Paddle — 延遲是 max() 而非兩者相加
-  const { recognizeWithPaddleOcr } = require("./paddle");
-  const paddlePromise = recognizeWithPaddleOcr(imageData);
+  // PaddleOCR 冷啟動要載 ONNX 模型（老機器 CPU 數秒、記憶體數百 MB）。
+  // 實例已暖 → 與 UIA 並行（延遲取 max）；還是冷的 → 先給 UIA 一點時間（paddleDelayMs），
+  // UIA 很快成功就完全不碰 Paddle；UIA 拖久了（PowerShell 慢、UIA 逾時）Paddle 照樣提前並行開跑。
+  const paddle = require("./paddle");
+  const canTryUia = tryUIAutomation && !!screenBounds && process.platform === "win32";
+  let paddlePromise = null;
+  const startPaddle = () => {
+    if (!paddlePromise) paddlePromise = paddle.recognizeWithPaddleOcr(imageData);
+    return paddlePromise;
+  };
+  let paddleStarter = null;
+  if (!canTryUia || paddle.isWarm()) startPaddle();
+  else paddleStarter = setTimeout(startPaddle, paddleDelayMs);
 
   // 1. UI Automation（有螢幕座標才能用；視窗文字元素直讀，100% 準）
-  if (tryUIAutomation && screenBounds && process.platform === "win32") {
+  if (canTryUia) {
     try {
       const { getTextFromRect } = require("./uiAutomation");
       const uiaResult = await getTextFromRect(
@@ -27,6 +39,7 @@ async function extractText(options) {
         screenBounds.height
       );
       if (uiaResult.success && uiaResult.text.length > 0) {
+        clearTimeout(paddleStarter);
         return { text: uiaResult.text, method: "ui-automation", confidence: 100 };
       }
       console.log("UI Automation returned no text, falling back to OCR");
@@ -34,6 +47,8 @@ async function extractText(options) {
       console.log("UI Automation failed:", error.message);
     }
   }
+  clearTimeout(paddleStarter);
+  startPaddle();
 
   // 2. PaddleOCR（中文主力；模組內部已有單例 + 並發保護）
   let paddleFallback = null;

@@ -10,331 +10,91 @@ class FileManager {
     this.searchQuery = "";
     this.isLoading = false;
     this.lastDirectory = null; // 記錄實際儲存目錄供「開啟資料夾」使用
-    this.thumbnailQueue = []; // 縮圖載入隊列
-    this.isProcessingThumbnails = false;
-  }
-
-  // 新增：分批載入剩餘檔案
-  async loadRemainingBatches(batches, folderLabel) {
-    for (const batch of batches) {
-      const batchFiles = batch.map((f) => {
-        const fileUrl =
-          typeof f.path === "string"
-            ? (f.path.startsWith("file://")
-                ? f.path
-                : "file:///" + f.path.replace(/\\/g, "/"))
-            : "";
-
-        return {
-          id: f.id || Utils.generateId(),
-          name: f.name,
-          path: fileUrl || f.path || "",
-          thumbnail: f.thumbnail || fileUrl,
-          size: f.size || 0,
-          createdAt: f.createdAt || new Date().toISOString(),
-          modifiedAt: f.modifiedAt || new Date().toISOString(),
-          type: f.type || "image/png",
-          folder: folderLabel,
-          dimensions: f.dimensions || { width: 0, height: 0 },
-          needsThumbnail: !f.thumbnail
-        };
-      });
-
-      // 添加到檔案列表
-      batchFiles.forEach(file => {
-        this.files.set(file.id, file);
-      });
-
-      // 通知 UI 更新
-      this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
-      
-      // 給 UI 時間更新
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-  }
-
-  // 新增：延遲載入縮圖（限制並行度 + 使用 fsPath，降低阻塞）
-  async loadThumbnailsLazy(maxConcurrency = 3, thumbWidth = 150) {
-    if (this.isProcessingThumbnails) return;
-    this.isProcessingThumbnails = true;
-
-    const initialQueueSize = this.thumbnailQueue.length;
-    console.log(`[縮圖載入] 開始處理 ${initialQueueSize} 個縮圖`);
-
-    const worker = async () => {
-      while (true) {
-        const fileId = this.thumbnailQueue.shift();
-        if (!fileId) break;
-
-        const file = this.files.get(fileId);
-        if (!file || !file.needsThumbnail) continue;
-
-        if (window.electronAPI?.files?.getThumbnail) {
-          try {
-            // 優先使用真實檔案系統路徑（fsPath），避免傳入 file:/// 導致 nativeImage 失敗
-            let fsPath = file.fsPath;
-            if (!fsPath && typeof file.path === "string") {
-              // 從 file:/// 轉回系統路徑 - 修正：正確解碼中文路徑
-              const withoutScheme = file.path.replace(/^file:\/\/\//, "");
-              // 先解碼URI編碼的路徑
-              const decoded = decodeURIComponent(withoutScheme);
-              // Windows系統需要將正斜線轉回反斜線
-              fsPath = decoded.replace(/\//g, "\\");
-            }
-            if (fsPath) {
-              const thumbnail = await window.electronAPI.files.getThumbnail(fsPath, thumbWidth);
-              if (thumbnail) {
-                file.thumbnail = thumbnail;
-                file.needsThumbnail = false;
-                // 通知 UI 更新單個檔案
-                this.eventEmitter.emit("thumbnailLoaded", file);
-              }
-            }
-          } catch (error) {
-            // 靜默失敗，避免過多console輸出
-            file.needsThumbnail = false; // 避免重試
-          }
-        }
-      }
-    };
-
-    // 使用固定高並行度，確保快速處理
-    const n = Math.min(maxConcurrency, 10);
-    const tasks = Array.from({ length: n }, () => worker());
-    await Promise.all(tasks);
-
-    this.isProcessingThumbnails = false;
-    
-    // 如果還有剩餘的縮圖需要載入，立即繼續
-    if (this.thumbnailQueue.length > 0) {
-      console.log(`[縮圖載入] 繼續處理剩餘 ${this.thumbnailQueue.length} 個縮圖`);
-      // 立即繼續，不延遲
-      setImmediate(() => {
-        this.loadThumbnailsLazy(maxConcurrency, thumbWidth);
-      });
-    } else {
-      console.log(`[縮圖載入] 全部完成`);
-    }
+    this.watchActive = false;     // 主進程 fs.watch 是否生效（生效就不需要保險 refresh）
+    this.reloadRequested = false; // 載入中又收到變更 → 這輪載完再跑一次，不丟事件
   }
 
   async loadFolder(folderName) {
-    if (this.isLoading) return;
-
+    this.pendingFolder = folderName; // 載入中又被要求（切分頁 / fs.watch）：記最後一個，這輪結束再載它
+    if (this.isLoading) {
+      this.reloadRequested = true;
+      return;
+    }
     this.isLoading = true;
     this.currentFolder = folderName;
 
     try {
-      // 從檔案系統讀取
       const files = await this.getFilesFromFolder(folderName);
-
       this.files.clear();
-      files.forEach((file) => {
-        this.files.set(file.id, file);
-      });
-
-      // 診斷：記錄載入的檔案數量與目前分頁
-      console.log("[FileManager] files loaded:", {
-        folder: this.currentFolder,
-        count: this.files.size
-      });
-
-      // 觸發事件給外部
+      for (const file of files) this.files.set(file.id, file);
       this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
-
-      // 啟動縮圖載入 - 使用 getFilteredFiles() 來保持與 UI 顯示順序一致
-      try {
-        this.thumbnailQueue = [];
-        
-        // 使用 getFilteredFiles() 來獲取已排序的檔案（與 UI 顯示順序一致）
-        const files = this.getFilteredFiles();
-        
-        // 按照顯示順序加入隊列
-        files.forEach((f) => {
-          if (!f.thumbnail && f.path && f.fsPath) {
-            f.needsThumbnail = true;
-            this.thumbnailQueue.push(f.id);
-          }
-        });
-        
-        console.log(`[縮圖隊列] 準備載入 ${this.thumbnailQueue.length} 個縮圖（按顯示順序）`);
-        
-        if (this.thumbnailQueue.length > 0) {
-          // 立即啟動高並行載入
-          setImmediate(() => {
-            this.loadThumbnailsLazy(10, 150);
-          });
-        }
-      } catch (e) {
-        console.warn("thumbnail preload queue failed:", e);
-      }
     } catch (error) {
       console.error("Failed to load folder:", error);
       this.eventEmitter.emit("loadError", error);
     } finally {
       this.isLoading = false;
+      if (this.reloadRequested) {
+        this.reloadRequested = false;
+        this.loadFolder(this.pendingFolder);
+      }
     }
   }
 
+  // 主進程回傳 { id, name, path(實體), size, mtimeMs, type }，id 穩定（檔案沒變就不變），
+  // 這裡只補 UI 需要的 file:/// 與資料夾標籤；縮圖交給 ThumbnailLoader 進視口才產。
   async getFilesFromFolder(folderName) {
-    // folderName 現在是「要瀏覽的資料夾絕對路徑」（分頁）；未提供則由主進程用預設儲存資料夾
-    const browsePath = (typeof folderName === "string" && /[\\/]/.test(folderName))
-      ? folderName
-      : undefined;
-    // 優先從主進程列出真實截圖檔案
-    try {
-      if (window?.electronAPI?.files?.listScreenshots) {
-        const res = await window.electronAPI.files.listScreenshots(browsePath);
-        if (res?.success && Array.isArray(res.files)) {
-          // 記錄實際儲存目錄供「開啟資料夾」使用
-          this.lastDirectory = res.directory || this.lastDirectory;
+    const browsePath =
+      typeof folderName === "string" && /[\\/]/.test(folderName) ? folderName : undefined;
+    const api = window.electronAPI?.files;
+    if (!api?.listScreenshots) return Array.from(this.files.values());
 
-          // 推導分頁顯示名稱：Desktop -> 桌面，否則使用資料夾名稱或傳入的 folderName
-          const dirName = (res.directory || "").split(/[\\/]/).pop() || "";
-          const folderLabel =
-            dirName.toLowerCase() === "desktop" ? "桌面" : (dirName || folderName);
-
-          // 極速載入：立即返回初始批次（防止重複通知）
-          if (!window.DukshotApp?.lastFilesLoadTime ||
-              Date.now() - window.DukshotApp.lastFilesLoadTime > 5000) {
-            console.log(`快速載入前 ${res.files.length} 個檔案，總共 ${res.totalCount || res.files.length} 個`);
-          }
-          
-          // 對齊系統內部檔案結構，讓 UI 可以直接顯示
-          // 診斷：列出主程序回傳的檔案數與目錄
-          try {
-            console.log("[FileManager] listScreenshots result:", {
-              success: res?.success,
-              received: Array.isArray(res.files) ? res.files.length : 0,
-              directory: res.directory,
-              hasMore: res.hasMore,
-              totalCount: res.totalCount
-            });
-          } catch {}
-
-          const realFiles = res.files.map((f) => {
-            // 真實檔案系統路徑（供縮圖 IPC 使用）
-            const fsPath = typeof f.path === "string" ? f.path : "";
-            // UI 顯示使用 file:/// URL - 修正：正確處理中文路徑
-            let fileUrl = "";
-            if (typeof fsPath === "string" && fsPath.length > 0) {
-              if (fsPath.startsWith("file://")) {
-                fileUrl = fsPath;
-              } else {
-                // 將反斜線轉為正斜線
-                const normalized = fsPath.replace(/\\/g, "/");
-                // 只編碼需要編碼的字符，保留路徑分隔符
-                const segments = normalized.split("/");
-                const encoded = segments.map(segment => {
-                  // 如果是磁碟機代號（如 C:），不編碼
-                  if (segment.match(/^[A-Za-z]:$/)) {
-                    return segment;
-                  }
-                  // 對每個路徑段進行 URI 編碼，但保留已編碼的字符
-                  return encodeURIComponent(decodeURIComponent(segment));
-                }).join("/");
-                fileUrl = "file:///" + encoded;
-              }
-            }
-
-            return {
-              id: f.id || Utils.generateId(),
-              name: f.name,
-              // 保存兩種路徑：UI 用 path（file:///），IPC 用 fsPath（實體路徑）
-              path: fileUrl || fsPath || "",
-              fsPath: fsPath || "",
-              thumbnail: f.thumbnail || fileUrl,
-              size: f.size || 0,
-              createdAt: f.createdAt || new Date().toISOString(),
-              modifiedAt: f.modifiedAt || new Date().toISOString(),
-              type: f.type || "image/png",
-              folder: folderLabel,
-              dimensions: f.dimensions || { width: 0, height: 0 },
-            };
-          });
-
-          // 如果有更多檔案，監聽批次載入
-          if (res.hasMore && window.electronAPI?.on) {
-            // 移除舊的監聽器避免重複
-            window.electronAPI.off?.("batch-files-loaded");
-            
-            // 監聽批次載入的檔案
-            window.electronAPI.on("batch-files-loaded", (_event, payload) => {
-              if (payload?.files && Array.isArray(payload.files)) {
-                console.log(`[批次 ${payload.batchNumber}] 載入 ${payload.files.length} 個檔案`);
-                
-                // 處理批次載入的檔案
-                const batchFiles = [];
-                payload.files.forEach(f => {
-                  const fsPath = typeof f.path === "string" ? f.path : "";
-                  // 修正：正確處理中文路徑編碼
-                  let fileUrl = "";
-                  if (fsPath) {
-                    const normalized = fsPath.replace(/\\/g, "/");
-                    const segments = normalized.split("/");
-                    const encoded = segments.map(segment => {
-                      if (segment.match(/^[A-Za-z]:$/)) {
-                        return segment;
-                      }
-                      return encodeURIComponent(decodeURIComponent(segment));
-                    }).join("/");
-                    fileUrl = "file:///" + encoded;
-                  }
-                    
-                  const file = {
-                    id: f.id || Utils.generateId(),
-                    name: f.name,
-                    path: fileUrl || fsPath || "",
-                    fsPath: fsPath || "",
-                    thumbnail: f.thumbnail || null,
-                    size: f.size || 0,
-                    createdAt: f.createdAt || new Date().toISOString(),
-                    modifiedAt: f.modifiedAt || new Date().toISOString(),
-                    type: f.type || "image/png",
-                    folder: folderLabel,
-                    dimensions: f.dimensions || { width: 0, height: 0 },
-                    needsThumbnail: !f.thumbnail
-                  };
-                  
-                  // 加入到檔案列表
-                  this.files.set(file.id, file);
-                  // 排入縮圖隊列
-                  if (file.needsThumbnail) {
-                    this.thumbnailQueue.push(file.id);
-                  }
-                  batchFiles.push(file);
-                });
-                
-                // 通知 UI 更新
-                this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
-                
-                // 批次載入縮圖（提高並行度）
-                if (this.thumbnailQueue.length > 0 && !this.isProcessingThumbnails) {
-                  // 依批次調整並行度
-                  const concurrency = payload.batchNumber === 2 ? 5 : 3;
-                  this.loadThumbnailsLazy(concurrency, 150);
-                }
-                
-                // 顯示載入進度（非最後一批才顯示）
-                if (payload.hasMore) {
-                  const totalLoaded = this.files.size;
-                  console.log(`[批次載入] 已載入 ${totalLoaded} 個檔案，還有更多...`);
-                } else {
-                  console.log(`[批次載入] 全部載入完成，共 ${this.files.size} 個檔案`);
-                }
-              }
-            });
-          }
-
-          return realFiles;
-        }
-      }
-    } catch (e) {
-      console.warn("listScreenshots failed, fallback to mock:", e);
+    const res = await api.listScreenshots(browsePath);
+    if (!res?.success || !Array.isArray(res.files)) {
+      console.warn("[FileManager] listScreenshots 失敗，保留現有清單:", res?.error);
+      return Array.from(this.files.values());
     }
+    this.lastDirectory = res.directory || this.lastDirectory;
+    const folderLabel = FileManager.folderLabel(res.directory || folderName);
+    return res.files.map((f) => FileManager.toFileEntry(f, folderLabel));
+  }
 
-    // Fallback：停用模擬資料，但避免清空已載入內容 → 回傳現有清單
-    console.warn("[FileManager] listScreenshots 不可用或失敗，保留現有清單（停用 mock）");
-    return Array.from(this.files.values());
+  static folderLabel(dir) {
+    const name = String(dir || "").split(/[\\/]/).filter(Boolean).pop() || "";
+    return name.toLowerCase() === "desktop" ? "桌面" : name;
+  }
+
+  // 實體路徑 → file:///（逐段編碼，磁碟機代號不編碼；中文路徑才能被 <img>/fetch 讀到）
+  static toFileUrl(fsPath) {
+    if (!fsPath) return "";
+    if (fsPath.startsWith("file://")) return fsPath;
+    return (
+      "file:///" +
+      fsPath
+        .replace(/\\/g, "/")
+        .split("/")
+        .map((seg) => (/^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
+        .join("/")
+    );
+  }
+
+  static toFileEntry(f, folderLabel) {
+    const fsPath = typeof f.path === "string" ? f.path : "";
+    const mtimeMs = Number.isFinite(f.mtimeMs) ? f.mtimeMs : Date.now();
+    const iso = new Date(mtimeMs).toISOString();
+    return {
+      id: f.id || `${fsPath}|${Math.round(mtimeMs)}`,
+      name: f.name,
+      path: FileManager.toFileUrl(fsPath), // UI / fetch 用
+      fsPath,                              // IPC（刪除、搬移）用
+      thumbnail: null,
+      size: f.size || 0,
+      mtimeMs,
+      createdAt: iso,
+      modifiedAt: iso,
+      type: f.type || "image/png",
+      folder: folderLabel,
+      dimensions: null,
+    };
   }
 
   generatePlaceholderSVG(width, height, text) {
@@ -354,15 +114,13 @@ class FileManager {
   getFilteredFiles() {
     let files = Array.from(this.files.values());
 
-    // 搜尋過濾
     if (this.searchQuery) {
       const query = this.searchQuery.toLowerCase();
       files = files.filter((file) => file.name.toLowerCase().includes(query));
     }
 
-    // 排序 (按建立時間倒序)
-    files.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
+    // 以數字 mtime 排序（新到舊），不再每次比較都 parse Date 字串
+    files.sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0) || a.name.localeCompare(b.name));
     return files;
   }
 
@@ -514,10 +272,8 @@ class FileManager {
       this.eventEmitter.emit("filesDeleted", actuallyDeleted);
       this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
 
-      // 保險刷新一次（避免快取與實體不同步）
-      setTimeout(() => {
-        try { this.refresh(); } catch {}
-      }, 150);
+      // 主進程 fs.watch 生效時會自己通知；沒生效才補一次 refresh
+      if (!this.watchActive) this.refresh();
 
       try {
         console.log("[deleteFiles] 解析路徑:", resolvedCount, "實際刪除:", actuallyDeleted.length, "失敗:", failedList.length, "樣本路徑:", debugSamplePath);
@@ -755,73 +511,44 @@ class FileManager {
     }
   }
 
-  async addScreenshot(imageData, filename, folder = null, filePath = null) {
-    try {
-      const targetFolder = folder || this.currentFolder;
+  // 主進程存檔後通知：{ path, id, mtimeMs, size, name }（id 與 list-screenshots 一致，
+  // 之後 fs.watch 觸發重新列出時卡片不會閃爍）。只有正在看存檔資料夾時才即時插入。
+  // 相容舊呼叫 addScreenshot(imageData, filename, folder, filePath)。
+  async addScreenshot(entry, legacyName, _legacyFolder, legacyPath) {
+    const info =
+      entry && typeof entry === "object" ? entry : { path: legacyPath, name: legacyName };
+    const fsPath = String(info.path || "");
+    if (!fsPath) return null;
 
-      // 決定顯示與路徑
-      // - 優先使用主程序回傳的實際檔案路徑（轉為 file:/// URL 供 <img> 使用）
-      // - 若沒有檔案路徑，則使用 DataURL 立即顯示
-      let resolvedPath = filePath || `./screenshots/${targetFolder}/${filename}`;
-      let displaySrc = imageData;
+    const idx = Math.max(fsPath.lastIndexOf("\\"), fsPath.lastIndexOf("/"));
+    const savedDir = idx > 0 ? fsPath.slice(0, idx) : "";
+    if (savedDir) this.lastDirectory = savedDir;
 
-      if (!displaySrc && resolvedPath) {
-        const isFileUrl =
-          typeof resolvedPath === "string" && resolvedPath.startsWith("file://");
-        displaySrc = isFileUrl
-          ? resolvedPath
-          : encodeURI("file:///" + String(resolvedPath).replace(/\\/g, "/"));
-      }
-
-      // 若拿到主行程的實體路徑，更新 lastDirectory 以支援後續「開啟資料夾」與刪除解析
-      try {
-        const rawPath = String(filePath || resolvedPath);
-        const idx = Math.max(rawPath.lastIndexOf("\\"), rawPath.lastIndexOf("/"));
-        if (idx > 0) {
-          this.lastDirectory = rawPath.slice(0, idx);
-        }
-      } catch {}
-
-      const file = {
-        id: Utils.generateId(),
-        name: filename,
-        // UI 用 file:///，縮圖/刪除 IPC 用 fsPath
-        path: displaySrc || encodeURI("file:///" + String(resolvedPath).replace(/\\/g, "/")),
-        fsPath: String(filePath || resolvedPath),
-        thumbnail: displaySrc, // 讓 <img> 可以立即顯示（DataURL 或 file:///）
-        size: imageData ? this.estimateImageSize(imageData) : 0,
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
+    const file = FileManager.toFileEntry(
+      {
+        id: info.id,
+        name: info.name || fsPath.slice(idx + 1),
+        path: fsPath,
+        size: info.size || 0,
+        mtimeMs: info.mtimeMs || Date.now(),
         type: "image/png",
-        folder: targetFolder,
-        dimensions: this.extractImageDimensions(imageData),
-      };
+      },
+      FileManager.folderLabel(savedDir)
+    );
 
-      // 只有「目前正在瀏覽的資料夾」就是這張圖實際存放的資料夾時，才即時加入視圖
-      const savedDir = (() => {
-        try {
-          const raw = String(filePath || resolvedPath);
-          const idx = Math.max(raw.lastIndexOf("\\"), raw.lastIndexOf("/"));
-          return idx > 0 ? raw.slice(0, idx) : "";
-        } catch { return ""; }
-      })();
-      const normPath = (p) => String(p || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
-      const isViewingSavedFolder =
-        !this.currentFolder ||
-        !/[\\/]/.test(String(this.currentFolder)) ||
-        normPath(savedDir) === normPath(this.currentFolder);
-      if (isViewingSavedFolder) {
-        this.files.set(file.id, file);
-        this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
-      }
+    const normPath = (p) =>
+      String(p || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+    const viewingSavedFolder =
+      !this.currentFolder ||
+      !/[\\/]/.test(String(this.currentFolder)) ||
+      normPath(savedDir) === normPath(this.currentFolder);
 
-      this.eventEmitter.emit("screenshotAdded", file);
-
-      return file;
-    } catch (error) {
-      console.error("Failed to add screenshot:", error);
-      throw error;
+    if (viewingSavedFolder && !this.files.has(file.id)) {
+      this.files.set(file.id, file);
+      this.eventEmitter.emit("filesLoaded", this.getFilteredFiles());
     }
+    this.eventEmitter.emit("screenshotAdded", file);
+    return file;
   }
 
   estimateImageSize(dataUrl) {

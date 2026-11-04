@@ -152,7 +152,8 @@ async function getTextFromRect(x, y, width, height) {
   try {
     const { stdout } = await execAsync(
       `powershell -NoProfile -NonInteractive -Command "${script.replace(/"/g, '\\"').replace(/\n/g, " ")}"`,
-      { timeout: 10000 }
+      // windowsHide：主進程沒有 console，不加會每次 OCR 閃一個 PowerShell 黑窗
+      { timeout: 10000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }
     );
 
     const data = JSON.parse(stdout.trim());

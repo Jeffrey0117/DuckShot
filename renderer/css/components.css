@@ -654,3 +654,9 @@
   opacity: 0.5;
   transform: rotate(5deg);
 }
+
+/* 縮圖產生失敗（檔案壞掉/被移走）：不再轉 shimmer，給個淡色底 */
+.file-thumbnail.error {
+  background: var(--background-tertiary);
+  opacity: 0.6;
+}

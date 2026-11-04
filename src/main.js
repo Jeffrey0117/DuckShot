@@ -14,115 +14,58 @@ const path = require("path");
 const fs = require("fs").promises;
 const os = require("os");
 const { moveFile } = require("./lib/moveFile");
+const { listImages, imageEntryId } = require("./lib/listImages");
+const { createSaveDirResolver } = require("./lib/saveDir");
 
-// 修復快取問題：禁用GPU快取以避免建立失敗
 app.commandLine.appendSwitch('--disable-gpu-sandbox');
-app.commandLine.appendSwitch('--disable-software-rasterizer');
+// 常駐的覆蓋層視窗在背景時不能被節流（否則 show 出來第一幀會延遲）
 app.commandLine.appendSwitch('--disable-background-timer-throttling');
 app.commandLine.appendSwitch('--disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('--disable-renderer-backgrounding');
-app.commandLine.appendSwitch('--disable-features', 'VizDisplayCompositor');
+// 注意：不要加 --disable-software-rasterizer（老筆電 GPU 被封鎖時需要軟體後備）；
+// --disable-features=VizDisplayCompositor 在現代 Chromium 早已無效，一併移除。
 
 // 在應用程式初始化前設定快取路徑至用戶目錄
 const userDataPath = path.join(os.homedir(), 'AppData', 'Local', 'Dukshot');
 app.setPath('userData', userDataPath);
 
-// 依顯示器 scaleFactor 動態計算最適縮圖尺寸（DPR 感知）
-function getOptimalThumbnailSize() {
-  try {
-    const useHiDpi = typeof store?.get === "function" ? store.get("highDpiCapture") !== false : true;
-    const displays = electron.screen.getAllDisplays();
-    let maxW = 0, maxH = 0;
-    for (const d of displays) {
-      const scale = (d.scaleFactor || 1);
-      // 直接使用物理像素，確保最高品質
-      const w = Math.round(d.size.width  * scale);
-      const h = Math.round(d.size.height * scale);
-      if (w * h > maxW * maxH) {
-        maxW = w;
-        maxH = h;
-      }
-    }
-    if (maxW > 0 && maxH > 0) {
-      // 確保尺寸不會太小，至少使用實際螢幕解析度
-      return { width: Math.max(maxW, 1920), height: Math.max(maxH, 1080) };
-    }
-  } catch (e) {
-    console.warn("getOptimalThumbnailSize error:", e.message);
-  }
-  // 後備：使用更高的預設值以確保品質
-  return { width: 7680, height: 4320 }; // 8K 解析度
+// 指定螢幕的物理像素尺寸（highDpiCapture 關閉時用 DIP）。
+// 只抓「該螢幕的實際大小」：不再 max(…,1920)/8K 後備，1366×768 的老筆電不會被要求放大擷取。
+function displayPhysicalSize(display) {
+  const useHiDpi = typeof store?.get === "function" ? store.get("highDpiCapture") !== false : true;
+  const scale = useHiDpi ? display.scaleFactor || 1 : 1;
+  return {
+    width: Math.max(1, Math.round(display.size.width * scale)),
+    height: Math.max(1, Math.round(display.size.height * scale)),
+  };
 }
+
+function displayUnderCursor() {
+  const pt = electron.screen.getCursorScreenPoint();
+  return { cursorPt: pt, display: electron.screen.getDisplayNearestPoint(pt) };
+}
+
+// 把 renderer 送來的影像（data URL / base64 字串，或 ArrayBuffer / Uint8Array 位元組）轉成 Buffer
+function toImageBuffer(input) {
+  if (Buffer.isBuffer(input)) return input;
+  if (input instanceof ArrayBuffer) return Buffer.from(input);
+  if (ArrayBuffer.isView(input)) return Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+  if (typeof input === "string" && input.length > 0) {
+    const base64 = input.includes(",") ? input.slice(input.indexOf(",") + 1) : input;
+    if (!base64) throw new Error("No base64 data found");
+    return Buffer.from(base64, "base64");
+  }
+  throw new Error("Invalid image data format");
+}
+
+const ALLOWED_FORMATS = new Set(["png", "jpg", "jpeg", "webp"]);
 
 // 工具函式：用於控制等待時機
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// 動態等待時間配置
-const COMPOSITOR_WAIT_CONFIG = {
-  minWait: 16,     // 最小等待時間 (ms)
-  maxWait: 48,     // 最大等待時間 (ms)
-  baseWait: 32,    // 基準等待時間 (ms)
-  loadThreshold: 0.7, // CPU負載閾值 (0-1)
-};
-
-// 系統負載檢測和動態等待時間計算
-function getDynamicWaitTime(targetWaitMs = 32) {
-  try {
-    // 獲取系統負載 (1分鐘平均負載)
-    const loadAvg = os.loadavg()[0];
-    const numCpus = os.cpus().length;
-
-    // 計算相對負載 (0-1)
-    const relativeLoad = Math.min(loadAvg / numCpus, 1);
-
-    console.debug(`[動態等待] 系統負載: ${loadAvg.toFixed(2)}, CPU數: ${numCpus}, 相對負載: ${(relativeLoad * 100).toFixed(1)}%`);
-
-    let waitTime;
-
-    if (relativeLoad > COMPOSITOR_WAIT_CONFIG.loadThreshold) {
-      // 高負載時使用較長等待時間
-      waitTime = Math.min(targetWaitMs + 8, COMPOSITOR_WAIT_CONFIG.maxWait);
-      console.debug(`[動態等待] 高負載模式: ${waitTime}ms`);
-    } else if (relativeLoad < 0.3) {
-      // 低負載時使用較短等待時間
-      waitTime = Math.max(targetWaitMs - 8, COMPOSITOR_WAIT_CONFIG.minWait);
-      console.debug(`[動態等待] 低負載模式: ${waitTime}ms`);
-    } else {
-      // 中等負載使用基準等待時間
-      waitTime = targetWaitMs;
-      console.debug(`[動態等待] 標準模式: ${waitTime}ms`);
-    }
-
-    return Math.round(waitTime);
-  } catch (error) {
-    console.warn("[動態等待] 負載檢測失敗，使用基準等待時間:", error.message);
-    return targetWaitMs;
-  }
-}
-
-// 優化等待函數 - 整合動態調整和錯誤處理
-async function optimizedSleep(targetMs = 32, description = "等待") {
-  const dynamicMs = getDynamicWaitTime(targetMs);
-  console.debug(`[${description}] ${description} ${dynamicMs}ms (目標: ${targetMs}ms)`);
-
-  try {
-    await sleep(dynamicMs);
-    console.debug(`[${description}] ${description}完成`);
-  } catch (error) {
-    console.error(`[${description}] ${description}失敗:`, error);
-    // 錯誤時仍嘗試等待基準時間
-    try {
-      await sleep(targetMs);
-    } catch (fallbackError) {
-      console.error(`[${description}] 後備等待也失敗:`, fallbackError);
-    }
-  }
-}
-
-// 向下相容的舊常數 (將逐步淘汰)
-const COMPOSITOR_WAIT_TIME = 32; // 初始值 32ms，若仍有殘影可調整為 48-64ms
-const COMPOSITOR_WAIT_TIME_1 = 32; // 單幀等待時間
-const COMPOSITOR_WAIT_TIME_2 = 64; // 雙幀等待時間（更保守）
+// 主視窗隱身後等合成器把它真的從桌面拿掉的時間。
+// 舊版「依 os.loadavg() 動態調整」在 Windows 永遠拿到 0，是死邏輯，改為常數。
+const COMPOSITOR_WAIT_MS = 56;
 
 // 隱藏視窗時的螢幕外座標
 const HIDE_OFFSCREEN_POS = { x: -10000, y: -10000 };
@@ -239,7 +182,7 @@ class ShortcutManager {
     const shortcuts = store.get("shortcuts") || {};
     const shortcutConfig = shortcuts[shortcut];
     const isEnabled = shortcutConfig ? shortcutConfig.enabled !== false : true;
-    
+
     if (!isEnabled || !this.enabled) {
       console.log(`快捷鍵 ${shortcut} 已停用`);
       return false;
@@ -257,7 +200,7 @@ class ShortcutManager {
       if (globalShortcut.isRegistered(key)) {
         globalShortcut.unregister(key);
       }
-      
+
       // 註冊新的快捷鍵
       console.log(`嘗試註冊快捷鍵: ${shortcut} -> ${key}`);
       const success = globalShortcut.register(key, callback);
@@ -317,17 +260,17 @@ class ShortcutManager {
 
     // 保存原始 callback
     const originalCallback = data.callback;
-    
+
     // 更新快捷鍵
     this.unregister(shortcut);
     const shortcuts = store.get("shortcuts") || {};
     shortcuts[shortcut] = shortcuts[shortcut] || {};
     shortcuts[shortcut].key = newKey;
     store.set("shortcuts", shortcuts);
-    
+
     // 使用原始 callback 重新註冊
     const success = this.register(shortcut, originalCallback);
-    
+
     return success ? { success: true } : { error: "註冊失敗" };
   }
 
@@ -377,17 +320,31 @@ class DukshotApp {
     this.shortcutManager = new ShortcutManager();
     this.tray = null;
     this.isQuitting = false;
+    // 常駐覆蓋層：captureActive 表示覆蓋層目前正在截圖中（視窗本身平常是隱藏常駐）
+    this.captureActive = false;
+    this.captureWindowReady = null;
+    // 圖庫資料夾監看
+    this.folderWatcher = null;
+    this.folderWatchDebounce = null;
+    this.displayRefreshTimer = null;
+    // 儲存資料夾解析（Windows 圖片路徑只問系統一次）
+    this.saveDirResolver = createSaveDirResolver({ homedir: os.homedir() });
   }
 
   async initialize() {
     // 等待 Electron 準備完成
     await electron.app.whenReady();
 
-    // 預先快取螢幕來源 ID（截圖快捷鍵按下時零等待），螢幕配置變更時刷新
+    // 預先快取螢幕來源 ID（截圖快捷鍵按下時零等待），螢幕配置變更時刷新。
+    // display-metrics-changed 會連發（工作列自動隱藏、DPI 切換），debounce 後只查一次。
     this.refreshScreenSourceId();
-    electron.screen.on("display-added", () => this.refreshScreenSourceId());
-    electron.screen.on("display-removed", () => this.refreshScreenSourceId());
-    electron.screen.on("display-metrics-changed", () => this.refreshScreenSourceId());
+    const scheduleSourceRefresh = () => {
+      clearTimeout(this.displayRefreshTimer);
+      this.displayRefreshTimer = setTimeout(() => this.refreshScreenSourceId(), 500);
+    };
+    electron.screen.on("display-added", scheduleSourceRefresh);
+    electron.screen.on("display-removed", scheduleSourceRefresh);
+    electron.screen.on("display-metrics-changed", scheduleSourceRefresh);
 
     // 開發驗證用：`electron . --test-toast` 啟動後 4 秒以最近一張截圖觸發分類 toast，
     // 方便調整 toast 外觀（正常啟動不帶此參數，零影響）
@@ -437,6 +394,9 @@ class DukshotApp {
 
     // 設定 IPC 處理器
     this.setupIpcHandlers();
+
+    // 主視窗先上，再預建常駐的截圖覆蓋層（老機器啟動時不要兩個視窗搶 CPU）
+    setTimeout(() => this.prewarmCaptureWindow(), 1500);
   }
 
   createMainWindow() {
@@ -501,9 +461,13 @@ class DukshotApp {
       } catch {}
     });
 
-    // 視窗關閉事件
+    // 視窗關閉事件：常駐的覆蓋層若還在，window-all-closed 永遠不會觸發 → 一併銷毀
     this.mainWindow.on("closed", () => {
       this.mainWindow = null;
+      this.closeFolderWatcher();
+      if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+        try { this.captureWindow.destroy(); } catch {}
+      }
     });
   }
 
@@ -511,9 +475,9 @@ class DukshotApp {
     // 檢查是否啟用全域快捷鍵
     const shortcuts = store.get("shortcuts") || {};
     const globalEnabled = shortcuts.enabled !== false;
-    
+
     console.log("註冊全域快捷鍵，設定值:", shortcuts);
-    
+
     if (!globalEnabled) {
       console.log("全域快捷鍵已停用");
       return;
@@ -561,6 +525,7 @@ class DukshotApp {
         this.shortcutManager.unregisterAll();
       }
       globalShortcut.unregisterAll();
+      this.closeFolderWatcher();
       try {
         if (this.tray) {
           this.tray.destroy();
@@ -822,9 +787,8 @@ class DukshotApp {
     ipcMain.handle("get-desktop-sources", async () => {
       try {
         console.log("Requesting desktop sources...");
-        
-        const thumbnailSize = getOptimalThumbnailSize();
-        console.log("Using thumbnail size:", thumbnailSize);
+
+        const thumbnailSize = displayPhysicalSize(displayUnderCursor().display);
 
         const sources = await desktopCapturer.getSources({
           types: ["screen", "window"],
@@ -876,15 +840,11 @@ class DukshotApp {
     // 覆蓋層視訊流擷取失敗時的後備：用舊方法抓整張縮圖送回（慢但穩）
     ipcMain.handle("region-capture-fallback", async (event) => {
       try {
-        if (!this.captureWindow || event.sender !== this.captureWindow.webContents) {
+        if (!this.captureWindow || event.sender !== this.captureWindow.webContents || !this.captureActive) {
           return { success: false, error: "no capture window" };
         }
-        const sources = await desktopCapturer.getSources({
-          types: ["screen"],
-          thumbnailSize: getOptimalThumbnailSize(),
-        });
-        if (!sources.length) throw new Error("無法獲取螢幕源");
-        const dataUrl = sources[0].thumbnail.toDataURL();
+        const dataUrl = await this.grabScreenDataUrlForCaptureWindow();
+        if (!this.captureActive) return { success: false, error: "capture ended" };
         if (this.captureWindow && !this.captureWindow.isDestroyed()) {
           this.captureWindow.webContents.send("screen-data", dataUrl);
         }
@@ -906,107 +866,51 @@ class DukshotApp {
     });
 
     // 繼續截圖：沿用同一個覆蓋層視窗，重新擷取桌面送回去（用於連續截圖）
-    ipcMain.handle("continue-region-capture", async () => {
+    ipcMain.handle("continue-region-capture", async (event) => {
       try {
         const cw = this.captureWindow;
-        if (!cw || cw.isDestroyed()) {
+        if (!cw || cw.isDestroyed() || !this.captureActive || event.sender !== cw.webContents) {
           return { success: false, error: "截圖視窗不存在" };
         }
-        // 先把覆蓋層藏起來，避免它被擷取進下一張畫面
-        cw.hide();
-        await optimizedSleep(COMPOSITOR_WAIT_TIME_2, "繼續截圖-合成器等待");
-
-        const sources = await desktopCapturer.getSources({
-          types: ["screen"],
-          thumbnailSize: getOptimalThumbnailSize(),
-        });
-        if (!sources.length) {
-          if (!cw.isDestroyed()) cw.show();
-          return { success: false, error: "無法獲取螢幕源" };
-        }
-        const screenData = sources[0].thumbnail.toDataURL();
-        if (this.captureWindow && !this.captureWindow.isDestroyed()) {
-          this.captureWindow.webContents.send("screen-data", screenData);
-          this.captureWindow.setAlwaysOnTop(true, "screen-saver", 1);
-          this.captureWindow.show();
-          this.captureWindow.focus();
-        }
+        // 只把覆蓋層轉成完全透明（不 hide：hide/show 會讓 Chromium 重排可見性，
+        // 視訊流首幀偶爾會拖到 2~3 秒），透明視窗不會被擷取進下一張畫面；
+        // 然後重新走視訊流路徑（跟第一次一樣快，不在主進程編整張 PNG 再塞 IPC）
+        try { cw.setOpacity(0); } catch {}
+        await sleep(COMPOSITOR_WAIT_MS);
+        if (!this.captureActive || cw.isDestroyed()) return { success: false, error: "截圖已結束" };
+        const display = electron.screen.getDisplayMatching(cw.getBounds());
+        await this.presentCapture(display, electron.screen.getCursorScreenPoint());
         return { success: true };
       } catch (e) {
-        try {
-          if (this.captureWindow && !this.captureWindow.isDestroyed()) this.captureWindow.show();
-        } catch {}
+        console.error("continue-region-capture failed:", e);
+        this.hideCaptureWindow();
         return { success: false, error: e.message };
       }
     });
 
+    // 覆蓋層回報凍結幀已畫好 → 把不透明度調回 1（在這之前它是透明的，不會被截進畫面）
+    ipcMain.on("capture-drawn", (event) => {
+      if (!this.captureWindow || event.sender !== this.captureWindow.webContents) return;
+      this.revealCaptureWindow();
+    });
+
+    // 覆蓋層自己要求關閉（Esc/右鍵/存檔完成）：視窗常駐只隱藏
+    ipcMain.on("capture-dismiss", (event) => {
+      if (!this.captureWindow || event.sender !== this.captureWindow.webContents) return;
+      this.hideCaptureWindow();
+    });
+
     // 儲存截圖（支援可選 label 以利 A/B 命名）
+    const MAX_SAVE_BYTES = 64 * 1024 * 1024;
     ipcMain.handle("save-screenshot", async (event, imageData, format, label) => {
       try {
-        console.log("Starting screenshot save process...");
-
-        const fsp = require("fs").promises;
-        const pathMod = require("path");
-
-        // 使用預設儲存目錄（可由設定覆蓋，預設為桌面）
-        const targetDir = await this.getValidSaveDir();
-        await fsp.mkdir(targetDir, { recursive: true }).catch(err => {
-          console.warn(`[save-screenshot] 建立目錄失敗，嘗試繼續: ${err.message}`);
-        });
-
-        console.log(`Save path: ${targetDir}`);
-
-        // 生成檔案名稱（可選 label）
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-        let safeLabel = (typeof label === "string" && label.trim().length > 0) ? label.trim() : "";
-        // 基本清理：移除不安全字元
-        safeLabel = safeLabel.replace(/[^a-zA-Z0-9._-]+/g, "_");
-        const filename = safeLabel ? `Dukshot-${timestamp}-${safeLabel}.${format}` : `Dukshot-${timestamp}.${format}`;
-        const filePath = pathMod.join(targetDir, filename);
-
-        console.log(`Full file path: ${filePath}`);
-
-        // 檢查 imageData 格式
-        if (!imageData || typeof imageData !== "string") {
-          throw new Error("Invalid image data format");
-        }
-
-        // 確保 imageData 是正確的 base64 格式
-        const base64Data = imageData.includes(",")
-          ? imageData.split(",")[1]
-          : imageData;
-
-        if (!base64Data) {
-          throw new Error("No base64 data found");
-        }
-
-        // 儲存檔案
-        const buffer = Buffer.from(base64Data, "base64");
-        console.log(`Buffer size: ${buffer.length} bytes`);
-
-        await fsp.writeFile(filePath, buffer);
-
-        console.log("Screenshot saved successfully!");
-
-        // 通知主視窗更新清單（特別是區域截圖從 capture.html 呼叫本 IPC 時）
-        try {
-          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-            this.mainWindow.webContents.send("capture-completed", {
-              success: true,
-              path: filePath,
-              data: imageData, // 傳回 base64 以便立即顯示縮圖
-              type: "region",
-            });
-          }
-        } catch (notifyError) {
-          console.error(
-            "Error notifying renderer about capture completion:",
-            notifyError
-          );
-        }
-
-        this.showSortToast(filePath); // fire-and-forget，不阻塞存檔回應
-        return { success: true, path: filePath };
+        if (!this.isTrustedSender(event.sender)) throw new Error("拒絕的來源");
+        const fmt = String(format || "png").toLowerCase();
+        if (!ALLOWED_FORMATS.has(fmt)) throw new Error("不支援的圖片格式");
+        const buffer = toImageBuffer(imageData);
+        if (buffer.length === 0 || buffer.length > MAX_SAVE_BYTES) throw new Error("圖片資料大小不合法");
+        const entry = await this.writeScreenshotFile(buffer, fmt, label);
+        return { success: true, path: entry.path, entry };
       } catch (error) {
         console.error("Error saving screenshot:", error);
         return { success: false, error: error.message };
@@ -1153,7 +1057,7 @@ class DukshotApp {
         return { success: false, error: "無效的圖片資料" };
       }
       // 從截圖 overlay 觸發：overlay 關閉時主視窗先不要跳出來
-      if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+      if (this.captureActive) {
         this.skipNextMainRestore = true;
       }
       // 在 IPC 信任邊界驗證 screenBounds 形狀（4 個有限數字），不合法就跳過 UIA
@@ -1399,7 +1303,7 @@ class DukshotApp {
       this.openSettingsWindow();
       return { success: true };
     });
-    
+
     // 更新快捷鍵設定（回傳逐項結果，便於前端提示）
     ipcMain.handle("update-shortcuts", (event, shortcuts) => {
       console.log("更新快捷鍵設定:", shortcuts);
@@ -1514,108 +1418,35 @@ class DukshotApp {
       return { success: failures.length === 0, failures, warnings };
     });
 
-    // 列出預設截圖資料夾中的圖片（用於前端顯示）- 分批載入版本
+    // 列出資料夾圖片：readdir + 並行 stat，一次回傳（含真實 size/mtime 與穩定 id）。
+    // 舊版的「稍後背景 stat」在 return 之後才改物件，資料永遠到不了 renderer，是死碼。
     ipcMain.handle("list-screenshots", async (_event, folderPath) => {
       try {
-        // 可指定要瀏覽的資料夾（分頁），未指定則用預設儲存資料夾
-        const dir = (folderPath && typeof folderPath === "string" && folderPath.trim())
-          ? folderPath
-          : await this.getValidSaveDir();
-        console.log(`[list-screenshots] Target directory: ${dir}`);
-        
-        // 確保目錄存在
-        try {
-          await fs.mkdir(dir, { recursive: true });
-        } catch (err) {
-          console.warn(`[list-screenshots] Failed to create directory: ${err.message}`);
+        const requested =
+          typeof folderPath === "string" && folderPath.trim() ? folderPath : null;
+        const saveDir = await this.getValidSaveDir();
+        const dir = requested || saveDir;
+        // 只替預設儲存資料夾建目錄（首次啟動還不存在）；瀏覽別的資料夾不應該順手建資料夾
+        if (path.resolve(dir) === path.resolve(saveDir)) {
+          await fs.mkdir(dir, { recursive: true }).catch(() => {});
         }
-
-        const fsp = require("fs").promises;
-        const pathMod = require("path");
-        
-        // 檢查目錄是否可讀取
-        try {
-          await fsp.access(dir, fsp.constants.R_OK);
-        } catch (accessError) {
-          console.error(`[list-screenshots] Cannot read directory: ${dir}`, accessError);
-          // 嘗試返回空結果而非錯誤
-          return { success: true, files: [], directory: dir, hasMore: false, totalCount: 0 };
-        }
-        
-        const entries = await fsp.readdir(dir, { withFileTypes: true });
-        console.log(`[list-screenshots] Found ${entries.length} items`);
-
-        // 以資料夾名產生顯示用分頁標籤（Desktop → 桌面）
-        const dirName = pathMod.basename(dir);
-        const folderLabel =
-          dirName.toLowerCase() === "desktop" ? "桌面" : dirName;
-
-        // 只取常見圖片副檔名
-        const exts = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
-        
-        // 過濾出圖片檔案
-        const filteredEntries = entries.filter(entry => {
-          if (!entry.isFile()) return false;
-          const ext = pathMod.extname(entry.name).toLowerCase();
-          return exts.has(ext);
-        });
-
-        // 處理所有檔案，不再限制批次大小
-        const totalCount = filteredEntries.length;
-        console.log(`[list-screenshots] Total ${totalCount} files, loading all at once`);
-        
-        // 處理所有檔案（一次性載入）
-        const allFiles = filteredEntries.map((entry) => {
-          const full = pathMod.join(dir, entry.name);
-          const ext = pathMod.extname(entry.name).replace(".", "");
-          
-          return {
-            id: `${full}:${Date.now()}`,
-            name: entry.name,
-            path: full, // 實體路徑，前端會轉 file:///
-            thumbnail: null, // 延遲載入
-            size: 0, // 跳過檔案大小查詢以加快速度
-            createdAt: new Date().toISOString(),
-            modifiedAt: new Date().toISOString(),
-            type: `image/${ext}`,
-            folder: folderLabel,
-            dimensions: null,
-            needsStat: true // 標記需要延後載入 stat
-          };
-        });
-
-        // 背景載入所有檔案的 stat 資訊（稍後執行以免阻塞）
-        if (allFiles.length > 0) {
-          setTimeout(async () => {
-            for (const file of allFiles) {
-              if (file.needsStat) {
-                try {
-                  const stat = await fsp.stat(file.path);
-                  file.size = stat.size;
-                  file.modifiedAt = stat.mtime?.toISOString?.() || new Date().toISOString();
-                  file.createdAt = stat.birthtime?.toISOString?.() || new Date().toISOString();
-                  file.id = `${file.path}:${stat.mtimeMs}`;
-                  delete file.needsStat;
-                } catch (e) {
-                  // 忽略 stat 錯誤
-                }
-              }
-            }
-          }, 500);
-        }
-        
-        return {
-          success: true,
-          files: allFiles,
-          directory: dir,
-          hasMore: false,
-          totalCount: totalCount
-        };
+        const files = await listImages(dir);
+        return { success: true, files, directory: dir, totalCount: files.length };
       } catch (error) {
         console.error("[list-screenshots] 錯誤:", error);
-        console.error("[list-screenshots] 錯誤堆疊:", error.stack);
         return { success: false, error: error.message, files: [] };
       }
+    });
+
+    // 主視窗要求監看目前瀏覽的資料夾（內容變動 → "folder-changed"）
+    ipcMain.handle("watch-folder", async (event, dir) => {
+      if (!this.mainWindow || event.sender !== this.mainWindow.webContents) {
+        return { success: false, error: "not main window" };
+      }
+      if (!(await this.isGalleryFolder(dir))) {
+        return { success: false, error: "not a gallery folder" };
+      }
+      return { success: this.watchFolder(dir) };
     });
 
     // 新增獨立的縮圖生成 API（按需調用）
@@ -1644,8 +1475,6 @@ class DukshotApp {
 
     ipcMain.handle("get-thumbnail", async (event, filePath, width = 300) => {
       try {
-        console.log("[get-thumbnail] Request for:", filePath, "width:", width);
-
         if (!filePath || typeof filePath !== "string") {
           console.warn("[get-thumbnail] Invalid filePath:", filePath);
           return null;
@@ -1655,7 +1484,6 @@ class DukshotApp {
         let stat;
         try {
           stat = await fs.stat(filePath);
-          console.log("[get-thumbnail] File exists, size:", stat.size);
         } catch (statError) {
           console.warn("[get-thumbnail] File not found:", filePath, statError.message);
           return null;
@@ -1665,13 +1493,8 @@ class DukshotApp {
 
         // 記憶體快取命中
         const cached = thumbCacheGet(key);
-        if (cached) {
-          console.log("[get-thumbnail] Cache hit for:", filePath);
-          return cached;
-        }
+        if (cached) return cached;
 
-        // 產生縮圖
-        console.log("[get-thumbnail] Generating thumbnail for:", filePath);
         const ni = electron.nativeImage.createFromPath(filePath);
         if (ni.isEmpty()) {
           console.warn("[get-thumbnail] nativeImage is empty for:", filePath);
@@ -1685,7 +1508,6 @@ class DukshotApp {
         }
 
         const dataUrl = resized.toDataURL();
-        console.log("[get-thumbnail] Generated dataUrl length:", dataUrl.length);
 
         // 存入快取
         thumbCacheSet(key, dataUrl);
@@ -1848,12 +1670,13 @@ class DukshotApp {
       }
     });
 
-    ipcMain.handle("clipboard-write-image", (_event, dataUrl) => {
+    ipcMain.handle("clipboard-write-image", (_event, image) => {
       try {
-        if (!dataUrl || typeof dataUrl !== "string") {
-          return { success: false, error: "缺少影像資料" };
-        }
-        const img = electron.nativeImage.createFromDataURL(dataUrl);
+        if (!image) return { success: false, error: "缺少影像資料" };
+        const img =
+          typeof image === "string"
+            ? electron.nativeImage.createFromDataURL(image)
+            : electron.nativeImage.createFromBuffer(toImageBuffer(image));
         if (img.isEmpty()) return { success: false, error: "影像為空" };
         clipboard.writeImage(img);
         return { success: true };
@@ -1898,239 +1721,388 @@ class DukshotApp {
 
   async startRegionCapture() {
     const tStart = Date.now();
-    console.log("Starting region capture...");
-    console.debug("[區域截圖] 開始執行 startRegionCapture()");
-
-    if (this.captureWindow) {
+    if (this.captureActive) {
       return { success: false, error: "截圖視窗已開啟" };
     }
+    this.captureActive = true;
 
     try {
       // 多螢幕：目標螢幕 = 按下快捷鍵當下游標所在的螢幕
-      const cursorPt = electron.screen.getCursorScreenPoint();
-      const targetDisplay = electron.screen.getDisplayNearestPoint(cursorPt);
-      console.debug("[區域截圖] 目標螢幕:", targetDisplay.id, targetDisplay.bounds);
+      const { cursorPt, display: targetDisplay } = displayUnderCursor();
 
-      // 並行：立刻開始建立並載入截圖覆蓋層（先不顯示，建在目標螢幕），
-      // 與下面的隱身等待 + desktopCapturer 擷取同時進行，縮短覆蓋層出現時間。
-      this.createCaptureWindow(null, targetDisplay);
+      // 截圖 overlay 的數字鍵優先，收回 toast 的 1~9 全域快捷鍵
+      this.unregisterToastShortcuts();
+
+      // 常駐覆蓋層：通常已經載好，這裡只是搬到目標螢幕；第一次（或 renderer 掛掉後）才會真的建視窗
+      const ready = this.ensureCaptureWindow(targetDisplay);
 
       // 只有當主視窗「實際可見」時才需要隱身並等待合成器；
-      // 若主視窗已最小化／在托盤（使用者用全域快捷鍵的常見情況），
-      // 直接擷取即可，省去隱身與等待 → 截圖介面瞬間出現，且事後不會把視窗彈出來。
+      // 已最小化／在托盤時直接擷取，介面瞬間出現且事後不會把視窗彈出來。
       const mw = this.mainWindow;
       const mainVisible = !!(mw && !mw.isDestroyed() && mw.isVisible() && !mw.isMinimized());
       this.didHideMainForCapture = false;
 
       if (mainVisible) {
-        console.debug("[區域截圖] 主視窗可見 - 執行隱身");
-
-        // 記錄主視窗原始狀態（供後續還原）
         this.originalMainWindowBounds = mw.getBounds();
         this.originalMainWindowState = {
           bounds: this.originalMainWindowBounds,
           wasMaximized: mw.isMaximized(),
           wasMinimized: mw.isMinimized(),
         };
-
         // 雙重隱身：透明 + 最小化 + 移到螢幕外
         mw.setOpacity(0);
         mw.minimize();
         mw.setBounds(HIDE_OFFSCREEN_POS, false);
         this.didHideMainForCapture = true;
-
-        // 等待合成器更新，確保主視窗完全從桌面消失
-        await optimizedSleep(COMPOSITOR_WAIT_TIME_2, "區域截圖-合成器等待");
-      } else {
-        console.debug("[區域截圖] 主視窗不可見 - 跳過隱身與等待，直接擷取");
+        await sleep(COMPOSITOR_WAIT_MS);
       }
 
-      // 步驟 3: 取得「目標螢幕」的來源 ID（優先用啟動時快取的，零等待；沒有才現查），
-      // 實際畫面由覆蓋層用 getUserMedia 視訊流抓第一幀（比 getSources 整張縮圖快 ~700ms）
-      console.debug("[區域截圖] 步驟4 - 取得目標螢幕來源 ID");
-      let sourceId = this.getSourceIdForDisplay(targetDisplay.id);
-      if (!sourceId) {
-        const tGrab = Date.now();
-        await this.refreshScreenSourceId();
-        sourceId = this.getSourceIdForDisplay(targetDisplay.id);
-        console.log(`[perf] getSources(ids only, uncached): ${Date.now() - tGrab}ms`);
-      }
-      if (!sourceId) {
-        throw new Error("無法獲取螢幕源");
-      }
+      await ready;
+      await this.presentCapture(targetDisplay, cursorPt);
+      console.log(`[perf] region capture overlay shown: ${Date.now() - tStart}ms`);
 
-      const useHiDpi = store.get("highDpiCapture") !== false;
-      const scale = useHiDpi ? targetDisplay.scaleFactor || 1 : 1;
-      // 隱藏游標（預設開啟）：覆蓋層套用 CSS cursor:none，硬體游標就不會被串流擷取進畫面，
-      // 改以鴨鴨指標輔助對位（準星只是 DOM 疊層，不會進到存檔的 canvas）
-      const hideCursor = store.get("hideCursor") !== false;
-      // 游標螢幕座標 → 轉成「目標螢幕覆蓋層」的 client 座標（CSS px = DIP），
-      // 讓鴨鴨指標一出現就定位在游標處
-      const screenData = {
-        sourceId,
-        width: Math.round(targetDisplay.size.width * scale),
-        height: Math.round(targetDisplay.size.height * scale),
-        hideCursor,
-        cursorX: cursorPt.x - targetDisplay.bounds.x,
-        cursorY: cursorPt.y - targetDisplay.bounds.y,
-      };
-      console.debug("[區域截圖] 步驟5 - 螢幕來源就緒", screenData);
-
-      // 步驟 4: 覆蓋層已並行載入，這裡只需送資料並顯示
-      console.debug("[區域截圖] 步驟6 - 顯示截圖視窗");
-      const tShow = Date.now();
-      await this.showCaptureWindow(screenData);
-      console.log(`[perf] showCaptureWindow: ${Date.now() - tShow}ms`);
-      console.log(`[perf] region capture total: ${Date.now() - tStart}ms`);
-      console.debug("[區域截圖] 截圖視窗已顯示");
-
-      return {
-        success: true,
-        message: "區域截圖界面已開啟",
-        type: "region",
-      };
+      return { success: true, message: "區域截圖界面已開啟", type: "region" };
     } catch (error) {
       console.error("Error starting region capture:", error);
-      // 發生錯誤時清掉並行建立中的覆蓋層（其 closed 事件會還原主視窗）
-      if (this.captureWindow && !this.captureWindow.isDestroyed()) {
-        this.captureWindow.close();
-      } else {
-        this.restoreMainWindow();
-      }
+      this.hideCaptureWindow(); // 會還原主視窗
       return { success: false, error: error.message };
     }
   }
 
-  async startFullScreenCapture() {
-    console.log("Starting fullscreen capture...");
+  // 組 screen-data 並把常駐覆蓋層以「完全透明」狀態顯示；renderer 畫好凍結幀回報 capture-drawn
+  // 才把不透明度調回 1。這樣視訊流抓桌面時覆蓋層絕不會被截進去，重用視窗也不會閃出上一次的殘影。
+  async presentCapture(targetDisplay, cursorPt) {
+    let sourceId = this.getSourceIdForDisplay(targetDisplay.id);
+    if (!sourceId) {
+      await this.refreshScreenSourceId();
+      sourceId = this.getSourceIdForDisplay(targetDisplay.id);
+    }
+    if (!sourceId) throw new Error("無法獲取螢幕源");
 
+    const size = displayPhysicalSize(targetDisplay);
+    const screenData = {
+      sourceId,
+      width: size.width,            // 擷取幀物理像素
+      height: size.height,
+      boundsWidth: targetDisplay.bounds.width,   // 目標螢幕 DIP（renderer 用 width/boundsWidth 算縮放，
+      boundsHeight: targetDisplay.bounds.height, // 不依賴可能還沒更新的 devicePixelRatio / innerWidth）
+      scaleFactor: targetDisplay.scaleFactor || 1,
+      hideCursor: store.get("hideCursor") !== false,
+      cursorX: cursorPt.x - targetDisplay.bounds.x,
+      cursorY: cursorPt.y - targetDisplay.bounds.y,
+    };
+
+    const cw = this.captureWindow;
+    if (!cw || cw.isDestroyed()) throw new Error("截圖視窗建立失敗");
+    // 跨螢幕（不同 DPI）搬移時 Electron 偶爾一次 setBounds 尺寸會錯，差了就再設一次
+    cw.setBounds(targetDisplay.bounds, false);
+    const got = cw.getBounds();
+    if (got.width !== targetDisplay.bounds.width || got.height !== targetDisplay.bounds.height) {
+      cw.setBounds(targetDisplay.bounds, false);
+    }
+
+    this.captureDrawnSeq = (this.captureDrawnSeq || 0) + 1;
+    const seq = this.captureDrawnSeq;
+    try { cw.setOpacity(0); } catch {}
+    cw.webContents.send("screen-data", screenData);
+    cw.setAlwaysOnTop(true, "screen-saver", 1);
+    try { cw.setVisibleOnAllWorkspaces(true); } catch {}
+    cw.show();
+    cw.focus();
+    // 保險：renderer 沒回報（串流與後備都失敗）也在 4 秒後現身，使用者至少看得到提示並能按 Esc
+    clearTimeout(this.captureRevealTimer);
+    this.captureRevealTimer = setTimeout(() => this.revealCaptureWindow(seq), 4000);
+  }
+
+  revealCaptureWindow(seq) {
+    if (seq !== undefined && seq !== this.captureDrawnSeq) return;
+    clearTimeout(this.captureRevealTimer);
+    const cw = this.captureWindow;
+    if (cw && !cw.isDestroyed() && this.captureActive) {
+      try { cw.setOpacity(1); } catch {}
+    }
+  }
+
+  // 常駐覆蓋層：啟動後預建一個隱藏的截圖視窗，之後每次截圖只做 setBounds + show，
+  // 省掉老機器上每次 200~500ms 的 BrowserWindow 建立與 capture.html 載入。
+  ensureCaptureWindow(targetDisplay) {
+    const display = targetDisplay || electron.screen.getPrimaryDisplay();
+    if (this.captureWindow && !this.captureWindow.isDestroyed()) {
+      this.captureWindow.setBounds(display.bounds, false);
+      return this.captureWindowReady || Promise.resolve();
+    }
+
+    const b = display.bounds;
+    // 不用 fullscreen:true：Windows 會對全螢幕視窗播放系統縮放動畫，
+    // 改用手動鋪滿螢幕 + screen-saver 置頂（蓋過工作列），出現時零動畫。
+    const cw = new BrowserWindow({
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      frame: false,
+      transparent: true,
+      thickFrame: false,
+      alwaysOnTop: true,
+      show: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      closable: true,
+      skipTaskbar: true,
+      focusable: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, "preload.js"),
+        backgroundThrottling: false, // 隱藏常駐時也別節流，show 出來第一幀才不會拖
+      },
+    });
+    this.captureWindow = cw;
+    this.captureWindowReady = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("overlay load timeout")), 15000);
+      cw.webContents.once("did-finish-load", () => { clearTimeout(timer); resolve(); });
+      cw.webContents.once("did-fail-load", (_e, code, desc) => {
+        clearTimeout(timer);
+        reject(new Error(`overlay load failed: ${code} ${desc}`));
+      });
+    });
+    // 載入失敗就銷毀，下次 ensureCaptureWindow 重建；呼叫端 await 會拿到 reject
+    this.captureWindowReady.catch((e) => {
+      console.warn("[capture]", e.message);
+      try { if (!cw.isDestroyed()) cw.destroy(); } catch {}
+    });
+    cw.loadFile(path.join(__dirname, "../renderer/capture.html"));
+
+    // renderer 掛掉（老機器記憶體不足）：銷毀，下次 ensureCaptureWindow 重建
+    cw.webContents.on("render-process-gone", (_e, details) => {
+      console.warn("[capture] overlay renderer gone:", details && details.reason);
+      try { cw.destroy(); } catch {}
+    });
+
+    cw.on("closed", () => {
+      const wasActive = this.captureActive;
+      this.captureWindow = null;
+      this.captureWindowReady = null;
+      this.captureActive = false;
+      if (wasActive) this.onCaptureDismissed();
+    });
+
+    if (this.isDebug && store.get("openDevTools") === true) {
+      cw.webContents.openDevTools({ mode: "detach" });
+    }
+    return this.captureWindowReady;
+  }
+
+  prewarmCaptureWindow() {
+    if (this.isQuitting || !this.mainWindow || this.mainWindow.isDestroyed()) return;
     try {
-      // 獲取主螢幕
+      this.ensureCaptureWindow(displayUnderCursor().display);
+    } catch (e) {
+      console.warn("[capture] prewarm failed:", e.message);
+    }
+  }
+
+  // 覆蓋層結束（Esc/右鍵/存檔後/錯誤）：只隱藏不銷毀，renderer 收到 capture-reset 清狀態與畫面
+  hideCaptureWindow() {
+    if (!this.captureActive) return;
+    this.captureActive = false;
+    clearTimeout(this.captureRevealTimer);
+    const cw = this.captureWindow;
+    if (cw && !cw.isDestroyed()) {
+      try { cw.setOpacity(0); } catch {} // 到下次畫好新幀前都保持透明，殘影不可能被看到
+      try { cw.hide(); } catch {}
+      try { cw.webContents.send("capture-reset"); } catch {}
+    }
+    // 覆蓋層開著時 toast 的數字鍵 1~9 被壓住（避免搶 overlay 的數字鍵）；收掉後註冊回去
+    if (this.toastWindow && !this.toastWindow.isDestroyed() && this.toastLatestPayload) {
+      this.registerToastShortcuts(this.toastLatestPayload.tabs);
+    }
+    this.onCaptureDismissed();
+  }
+
+  onCaptureDismissed() {
+    // OCR 流程：主視窗先不還原，等 OCR 結果視窗關閉再還原（避免大視窗搶畫面）
+    if (this.skipNextMainRestore) {
+      this.skipNextMainRestore = false;
+      this.pendingMainRestoreAfterOcr = true;
+      return;
+    }
+    this.restoreMainWindow();
+  }
+
+  // 連續截圖 / 視訊流後備：抓「覆蓋層所在螢幕」整張畫面（依該螢幕物理尺寸，不放大）
+  async grabScreenDataUrlForCaptureWindow() {
+    const cw = this.captureWindow;
+    const display =
+      cw && !cw.isDestroyed()
+        ? electron.screen.getDisplayMatching(cw.getBounds())
+        : displayUnderCursor().display;
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: displayPhysicalSize(display),
+    });
+    if (!sources.length) throw new Error("無法獲取螢幕源");
+    const target =
+      sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
+    return target.thumbnail.toDataURL();
+  }
+
+  async startFullScreenCapture() {
+    try {
+      // 多螢幕：抓游標所在的螢幕；縮圖尺寸 = 該螢幕物理像素
+      const { display } = displayUnderCursor();
       const sources = await desktopCapturer.getSources({
         types: ["screen"],
-        thumbnailSize: getOptimalThumbnailSize(),
+        thumbnailSize: displayPhysicalSize(display),
       });
+      if (sources.length === 0) throw new Error("無法找到螢幕源");
+      const target =
+        sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
 
-      if (sources.length === 0) {
-        throw new Error("無法找到螢幕源");
-      }
-
-      // 使用第一個螢幕源
-      const primaryScreen = sources[0];
-      
-      // 直接使用高解析度縮圖，PNG 格式不需要品質參數
-      const imageData = primaryScreen.thumbnail.toDataURL("image/png");
-
-      // 直接保存截圖
-      const saveResult = await this.saveScreenshotDirect(imageData, "png");
-
-      console.log("Fullscreen capture completed successfully");
-      return {
-        success: saveResult.success,
-        data: imageData,
-        type: "fullscreen",
-        source: primaryScreen.name,
-        saved: saveResult.success,
-        path: saveResult.path,
-      };
+      // 直接拿 PNG 位元組寫檔，不經 base64 來回
+      const entry = await this.writeScreenshotFile(target.thumbnail.toPNG(), "png");
+      return { success: true, type: "fullscreen", source: target.name, saved: true, path: entry.path };
     } catch (error) {
       console.error("Error in fullscreen capture:", error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
   }
 
   async startActiveWindowCapture() {
-    console.log("Starting active window capture...");
-
     try {
-      // 獲取視窗源
+      // desktopCapturer 只能一次抓所有視窗的縮圖；尺寸壓在游標所在螢幕的物理像素，不放大
+      const { display } = displayUnderCursor();
       const sources = await desktopCapturer.getSources({
         types: ["window"],
-        thumbnailSize: getOptimalThumbnailSize(),
+        thumbnailSize: displayPhysicalSize(display),
+        fetchWindowIcons: false,
       });
+      if (sources.length === 0) throw new Error("無法找到視窗源");
 
-      if (sources.length === 0) {
-        throw new Error("無法找到視窗源");
-      }
-
-      // 過濾掉我們自己的應用視窗和系統視窗
+      const skip = ["Dukshot", "DuckShot", "Electron", "DevTools", "Task Manager", "System Settings", "Windows PowerShell", "Command Prompt"];
       const filteredSources = sources.filter(
         (source) =>
-          !source.name.includes("Dukshot") &&
-          !source.name.includes("Electron") &&
-          !source.name.includes("DevTools") &&
-          !source.name.includes("Task Manager") &&
-          !source.name.includes("System Settings") &&
           source.name.trim().length > 0 &&
           source.name !== "Desktop" &&
           source.name !== "Screen" &&
-          !source.name.includes("Windows PowerShell") &&
-          !source.name.includes("Command Prompt")
+          !skip.some((s) => source.name.includes(s))
       );
-
       if (filteredSources.length === 0) {
-        // 如果沒有其他視窗，就用主螢幕
         console.log("No suitable windows found, using screen capture instead");
         return await this.startFullScreenCapture();
       }
 
-      // 使用第一個可用的視窗
       const targetWindow = filteredSources[0];
-      const imageData = targetWindow.thumbnail.toDataURL();
-
-      // 直接保存截圖
-      const saveResult = await this.saveScreenshotDirect(imageData, "png");
-
+      const entry = await this.writeScreenshotFile(targetWindow.thumbnail.toPNG(), "png");
       console.log(`Window capture completed: ${targetWindow.name}`);
-      return {
-        success: saveResult.success,
-        data: imageData,
-        type: "window",
-        source: targetWindow.name,
-        saved: saveResult.success,
-        path: saveResult.path,
-      };
+      return { success: true, type: "window", source: targetWindow.name, saved: true, path: entry.path };
     } catch (error) {
       console.error("Error in window capture:", error);
-      return {
-        success: false,
-        error: error.message,
-      };
+      return { success: false, error: error.message };
     }
   }
 
-  // 直接保存截圖的輔助方法
+  // 寫檔 + 通知主視窗 + 分類 toast：所有截圖路徑共用。回傳與 list-screenshots 同形狀的 entry
+  // （id = path|mtime），renderer 直接插入清單，之後 fs.watch 重列時 id 一致不閃爍。
+  async writeScreenshotFile(buffer, format = "png", label = "") {
+    const targetDir = await this.getValidSaveDir();
+    await fs.mkdir(targetDir, { recursive: true }).catch((err) => {
+      console.warn(`[writeScreenshotFile] 建立目錄失敗，嘗試繼續: ${err.message}`);
+    });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const safeLabel = String(label || "").trim().replace(/[^a-zA-Z0-9._-]+/g, "_");
+    const filename = safeLabel
+      ? `Dukshot-${timestamp}-${safeLabel}.${format}`
+      : `Dukshot-${timestamp}.${format}`;
+    const filePath = path.join(targetDir, filename);
+
+    await fs.writeFile(filePath, buffer);
+    const st = await fs.stat(filePath).catch(() => null);
+    const mtimeMs = st ? st.mtimeMs : Date.now();
+    const entry = {
+      id: imageEntryId(filePath, mtimeMs),
+      name: filename,
+      path: filePath,
+      size: st ? st.size : buffer.length,
+      mtimeMs,
+      type: `image/${format}`,
+    };
+
+    try {
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send("capture-completed", { success: true, ...entry });
+      }
+    } catch (notifyError) {
+      console.error("Error notifying renderer about capture completion:", notifyError);
+    }
+    this.showSortToast(filePath); // fire-and-forget
+    return entry;
+  }
+
+  // 只有自家視窗（主視窗 / 覆蓋層 / OCR 結果）送來的 IPC 才能寫檔
+  isTrustedSender(sender) {
+    return [this.mainWindow, this.captureWindow, this.ocrResultWindow].some(
+      (w) => w && !w.isDestroyed() && w.webContents === sender
+    );
+  }
+
+  // 圖庫允許監看的資料夾：預設儲存資料夾或 galleryTabs 內的分頁
+  async isGalleryFolder(dir) {
+    if (typeof dir !== "string" || !dir.trim()) return false;
+    const target = path.resolve(dir);
+    if (path.resolve(await this.getValidSaveDir()) === target) return true;
+    const tabs = store.get("galleryTabs");
+    return (
+      Array.isArray(tabs) &&
+      tabs.some((t) => t && typeof t.path === "string" && path.resolve(t.path) === target)
+    );
+  }
+
+  // 監看圖庫目前瀏覽的資料夾；同時只監看一個。debounce 300ms 合併連發事件。
+  watchFolder(dir) {
+    this.closeFolderWatcher();
+    if (typeof dir !== "string" || !dir.trim()) return false;
+    try {
+      const watcher = require("fs").watch(dir, { persistent: false }, () => {
+        clearTimeout(this.folderWatchDebounce);
+        this.folderWatchDebounce = setTimeout(() => {
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send("folder-changed", dir);
+          }
+        }, 300);
+      });
+      watcher.on("error", (e) => {
+        console.warn("[watch-folder] watcher error:", e.message);
+        this.closeFolderWatcher();
+        // 告訴主視窗監看失效，讓它退回 focus 刷新
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.webContents.send("folder-watch-lost", dir);
+        }
+      });
+      this.folderWatcher = watcher;
+      return true;
+    } catch (e) {
+      console.warn("[watch-folder] failed:", e.message);
+      return false;
+    }
+  }
+
+  closeFolderWatcher() {
+    clearTimeout(this.folderWatchDebounce);
+    this.folderWatchDebounce = null;
+    if (this.folderWatcher) {
+      try { this.folderWatcher.close(); } catch {}
+      this.folderWatcher = null;
+    }
+  }
+
+  // 直接保存截圖（相容舊呼叫；實作統一在 writeScreenshotFile）
   async saveScreenshotDirect(imageData, format = "png") {
     try {
-      console.log("Saving screenshot directly...");
-
-      const targetDir = await this.getValidSaveDir();
-      await fs.mkdir(targetDir, { recursive: true }).catch(err => {
-        console.warn(`[saveScreenshotDirect] 建立目錄失敗，嘗試繼續: ${err.message}`);
-      });
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `Dukshot-${timestamp}.${format}`;
-      const filePath = path.join(targetDir, filename);
-
-      // 確保 imageData 是正確的 base64 格式
-      const base64Data = imageData.includes(",")
-        ? imageData.split(",")[1]
-        : imageData;
-
-      if (!base64Data) {
-        throw new Error("No base64 data found");
-      }
-
-      // 儲存檔案
-      const buffer = Buffer.from(base64Data, "base64");
-      await fs.writeFile(filePath, buffer);
-
-      console.log(`Screenshot saved to: ${filePath}`);
-      this.showSortToast(filePath);
-      return { success: true, path: filePath };
+      const entry = await this.writeScreenshotFile(toImageBuffer(imageData), format);
+      return { success: true, path: entry.path };
     } catch (error) {
       console.error("Error saving screenshot:", error);
       return { success: false, error: error.message };
@@ -2312,7 +2284,7 @@ class DukshotApp {
   // 截圖 overlay 開著時（連續截圖）跳過，避免搶走 overlay 自己的數字鍵。
   registerToastShortcuts(tabs) {
     this.unregisterToastShortcuts();
-    if (this.captureWindow && !this.captureWindow.isDestroyed()) return;
+    if (this.captureActive) return;
     const count = Math.min(tabs.length, 9);
     this.toastShortcutKeys = [];
     for (let i = 0; i < count; i++) {
@@ -2353,59 +2325,14 @@ class DukshotApp {
     }
   }
 
-  // 新增：取得有效的儲存目錄（非同步版本）
+  // 取得有效的儲存目錄：設定值存在就用；否則問一次系統「圖片」路徑（結果快取，不重複 spawn）
   async getValidSaveDir() {
     const configured = store.get("saveDirectory");
-    if (configured && typeof configured === "string" && configured.trim().length > 0) {
-      try {
-        await fs.access(configured);
-        return configured;
-      } catch (e) {
-        console.warn(`[getValidSaveDir] Configured path not accessible: ${configured}`);
-      }
+    const dir = await this.saveDirResolver.getValidSaveDir(configured);
+    if (configured && dir !== configured) {
+      console.warn(`[getValidSaveDir] Configured path not accessible: ${configured}`);
     }
-    
-    // 預設使用「圖片」資料夾下的 DuckShot 子目錄
-    const homedir = os.homedir();
-    let picturesBase = path.join(homedir, "Pictures");
-
-    // Windows 系統特殊處理：用 shell API 取得實際「圖片」路徑（含 OneDrive 重新導向）
-    if (process.platform === 'win32') {
-      try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
-
-        const { stdout } = await execPromise('powershell -command "[Environment]::GetFolderPath(\'MyPictures\')"');
-        if (stdout && stdout.trim()) {
-          picturesBase = stdout.trim();
-        }
-      } catch (err) {
-        console.log('[getValidSaveDir] PowerShell pictures path failed, using default');
-      }
-    }
-
-    // 候選「圖片」基底路徑（含中文與 OneDrive 版本），存在就用其下的 DuckShot 子目錄
-    const baseCandidates = [
-      picturesBase,
-      path.join(homedir, "Pictures"),
-      path.join(homedir, "圖片"), // 中文 Windows 顯示名
-      path.join(homedir, "OneDrive", "Pictures"),
-      path.join(homedir, "OneDrive", "圖片"),
-      path.join(homedir, "Documents"), // 最後備用
-    ];
-
-    for (const base of baseCandidates) {
-      try {
-        await fs.access(base);
-        return path.join(base, "DuckShot");
-      } catch (err) {
-        continue;
-      }
-    }
-
-    // 都無法存取時，返回預設 圖片/DuckShot（讓系統嘗試建立）
-    return path.join(picturesBase, "DuckShot");
+    return dir;
   }
 
   // 取得預設截圖儲存資料夾（同步版本，向下相容）
@@ -2420,95 +2347,6 @@ class DukshotApp {
     }
     // 預設使用「圖片」資料夾下的 DuckShot 子目錄
     return path.join(os.homedir(), "Pictures", "DuckShot");
-  }
-
-  createCaptureWindow(screenData = null, targetDisplay = null) {
-    console.debug("[區域截圖] createCaptureWindow() 開始執行");
-
-    // 截圖 overlay 的數字鍵優先，收回 toast 的 1~9 全域快捷鍵
-    this.unregisterToastShortcuts();
-
-    // 建立截圖視窗但先不顯示。
-    // 不用 fullscreen:true：Windows 會對全螢幕視窗播放系統縮放動畫（含工作列收合），
-    // 改用手動鋪滿螢幕 + screen-saver 置頂（蓋過工作列），出現時零動畫。
-    // 多螢幕：鋪滿「目標螢幕」（游標所在），而非永遠主螢幕。
-    const overlayBounds = (targetDisplay || electron.screen.getPrimaryDisplay()).bounds;
-    this.captureWindow = new BrowserWindow({
-      x: overlayBounds.x,
-      y: overlayBounds.y,
-      width: overlayBounds.width,
-      height: overlayBounds.height,
-      frame: false,
-      transparent: true,
-      thickFrame: false,
-      alwaysOnTop: true,
-      show: false, // 先不顯示，等載入完成後再顯示
-      resizable: false, // 防止視窗被調整大小
-      movable: false, // 防止視窗被移動
-      minimizable: false, // 防止最小化
-      maximizable: false, // 防止最大化
-      closable: true, // 允許關閉
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, "preload.js"),
-      },
-      skipTaskbar: true,
-      focusable: true, // 確保可以獲得焦點
-    });
-
-    console.debug("[區域截圖] 載入 capture.html");
-    // 載入截圖界面，並以 promise 記錄「載入完成」時機，
-    // 讓 startRegionCapture 能與 desktopCapturer 擷取「並行」進行（加速覆蓋層出現）。
-    this.captureWindowReady = new Promise((resolve) => {
-      this.captureWindow.webContents.once("did-finish-load", () => {
-        console.debug("[區域截圖] capture.html 載入完成");
-        resolve();
-      });
-    });
-    this.captureWindow.loadFile(
-      path.join(__dirname, "../renderer/capture.html")
-    );
-
-    // 截圖視窗關閉事件 - 在此還原主視窗
-    this.captureWindow.on("closed", () => {
-      console.debug("[區域截圖] 截圖視窗已關閉，開始還原主視窗");
-      this.captureWindow = null;
-      this.captureWindowReady = null;
-      // OCR 流程：主視窗先不還原，等 OCR 結果視窗關閉再還原（避免大視窗搶畫面）
-      if (this.skipNextMainRestore) {
-        this.skipNextMainRestore = false;
-        this.pendingMainRestoreAfterOcr = true;
-        return;
-      }
-      // 完整還原主視窗狀態
-      this.restoreMainWindow();
-    });
-
-    // 開發模式且設定允許時才開啟開發者工具
-    if (this.isDebug && store.get("openDevTools") === true) {
-      this.captureWindow.webContents.openDevTools();
-    }
-
-    return this.captureWindowReady;
-  }
-
-  // 等覆蓋層載入完成後，送入螢幕資料並顯示（與 createCaptureWindow 拆分以支援並行載入）
-  async showCaptureWindow(screenData) {
-    if (this.captureWindowReady) {
-      await this.captureWindowReady;
-    }
-    if (!this.captureWindow || this.captureWindow.isDestroyed()) return;
-
-    console.debug("[區域截圖] 傳送螢幕資料並顯示覆蓋層");
-    if (screenData) {
-      this.captureWindow.webContents.send("screen-data", screenData);
-    }
-    this.captureWindow.setAlwaysOnTop(true, "screen-saver", 1);
-    try { this.captureWindow.setVisibleOnAllWorkspaces(true); } catch {}
-    this.captureWindow.show();
-    this.captureWindow.focus();
-    console.debug("[區域截圖] 覆蓋層已顯示並聚焦");
   }
 
   // 新增主視窗還原方法
@@ -2561,13 +2399,13 @@ class DukshotApp {
       // 還原透明度
       this.mainWindow.setOpacity(1);
       console.debug("[區域截圖] - 還原透明度為 1");
-      
+
       // 還原位置（如果有記錄）
       if (this.originalMainWindowBounds) {
         this.mainWindow.setBounds(this.originalMainWindowBounds, false);
         console.debug("[區域截圖] - 還原視窗位置:", this.originalMainWindowBounds);
       }
-      
+
       // 根據原始狀態還原視窗
       if (this.originalMainWindowState) {
         if (this.originalMainWindowState.wasMaximized) {
@@ -2585,17 +2423,17 @@ class DukshotApp {
         // 沒有狀態記錄時，預設還原
         this.mainWindow.restore();
       }
-      
+
       // 同步置頂狀態（強制為 normal 層級，並取消全工作區可見）
       const aot = store.get("alwaysOnTop") === true;
       this.mainWindow.setAlwaysOnTop(aot, 'normal');
       try { this.mainWindow.setVisibleOnAllWorkspaces(false); } catch {}
       console.debug("[區域截圖] - 同步置頂狀態:", aot);
-      
+
       // 顯示視窗
       this.mainWindow.show();
       console.debug("[區域截圖] 主視窗還原完成");
-      
+
       // 清理狀態記錄
       this.originalMainWindowBounds = null;
       this.originalMainWindowState = null;

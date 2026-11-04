@@ -69,7 +69,7 @@
         height: 100%;
         pointer-events: none;
       }
-      
+
       /* 單個控制點樣式 */
       .resize-handle {
         position: absolute;
@@ -280,12 +280,6 @@
         width: 34px;
         height: 34px;
         filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
-        animation: duck-bob 1.6s ease-in-out infinite;
-      }
-
-      @keyframes duck-bob {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-2px); }
       }
 
       /* 幫助文字（預設隱藏，等畫面就緒後直接顯示在定位，避免早期排版跳動看起來像動畫） */
@@ -619,10 +613,10 @@
           this.toolbar = document.getElementById('captureToolbar');
           this.dpiInfo = null; // 已移除螢幕上的 DPI 診斷小字（保留下方 console 診斷）
           this.uploadModal = document.getElementById('uploadModal');
-          
+
           // DPI 相關
           this.dpr = window.devicePixelRatio || 1;
-          
+
           // 選取狀態
           this.isSelecting = false;
           this.isDraggingSelection = false;
@@ -632,20 +626,20 @@
           // 右鍵關閉（雙擊右鍵才退出）
           this.rightClickExitArmed = false;
           this.rightClickArmTimer = null;
-          
+
           // 拖曳相關
           this.dragStartX = 0;
           this.dragStartY = 0;
-          
+
           // 調整大小相關
           this.resizeHandle = null;
           this.resizeStartX = 0;
           this.resizeStartY = 0;
           this.resizeStartSelection = null;
-          
+
           // 上傳 API 設定（duk.tw）
           this.API_URL = "https://api.urusai.cc/v1/upload";
-          
+
           // 初始化
           this.init();
         }
@@ -655,14 +649,64 @@
           console.log('Device Pixel Ratio:', this.dpr);
           console.log('螢幕尺寸:', window.screen.width, 'x', window.screen.height);
 
-          // 設定高解析度畫布
-          this.setupHighDPICanvas();
-          
+          this.DEFAULT_HELP = document.querySelector('.help-text').textContent;
+
+          // 設定高解析度畫布（先用目前視窗尺寸；每次收到螢幕資料會依實際尺寸重設）
+          this.sizeCanvas(window.innerWidth * this.dpr, window.innerHeight * this.dpr);
+
           // 設定事件監聽
           this.setupEventListeners();
-          
+
           // 監聽螢幕數據
           this.listenForScreenData();
+
+          // 視窗常駐不銷毀：主進程隱藏它之後送 capture-reset，這裡清掉狀態與舊畫面
+          if (window.electronAPI?.on) {
+            window.electronAPI.on('capture-reset', () => this.resetState());
+          }
+        }
+
+        // 關閉覆蓋層：視窗是常駐的，交給主進程隱藏並還原主視窗；沒有 IPC 時退回 window.close()
+        dismiss() {
+          if (this._dismissing) return;
+          if (!window.electronAPI?.capture?.dismiss) { window.close(); return; }
+          this.resetState();
+          this._dismissing = true;
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            try { window.electronAPI.capture.dismiss(); } catch { window.close(); }
+          }));
+        }
+
+        // 凍結幀畫好了 → 通知主進程把覆蓋層從透明調回可見
+        notifyDrawn() {
+          try { window.electronAPI.send('capture-drawn'); } catch {}
+        }
+
+        // 每次截圖結束的重置：選區、工具列、彈窗、右鍵武裝、提示文字、準星，並釋放舊畫面
+        resetState() {
+          this.captureSeq = (this.captureSeq || 0) + 1;
+          this._dismissing = false;
+          this.isSelecting = false;
+          this.isDraggingSelection = false;
+          this.isResizing = false;
+          this.resizeHandle = null;
+          this.resizeStartSelection = null;
+          this.selection = null;
+          this.selectionBox.classList.remove('active');
+          this.dimensionDisplay.style.display = 'none';
+          this.toolbar.style.display = 'none';
+          document.body.style.cursor = '';
+          this.uploadModal.classList.remove('show');
+          this.rightClickExitArmed = false;
+          if (this.rightClickArmTimer) { clearTimeout(this.rightClickArmTimer); this.rightClickArmTimer = null; }
+          const help = document.querySelector('.help-text');
+          if (help) { help.textContent = this.DEFAULT_HELP; help.style.display = 'none'; }
+          document.body.classList.remove('crosshair-active');
+          this._crosshairOn = false;
+          // 暗區先藏起來：下次 show 出來、新畫面還沒抓到前不會先閃出舊暗幕
+          this.overlay.querySelectorAll('.dark-area').forEach((a) => { a.style.cssText = 'display: none;'; });
+          // 釋放上一張全螢幕點陣圖（老機器記憶體寶貴）
+          this.sizeCanvas(1, 1);
         }
 
         showDPIInfo() {
@@ -675,62 +719,54 @@
           }
         }
 
-        setupHighDPICanvas() {
-          const screenWidth = window.screen.width;
-          const screenHeight = window.screen.height;
-          
-          // 設定實際解析度（考慮 DPI）
-          this.canvas.width = screenWidth * this.dpr;
-          this.canvas.height = screenHeight * this.dpr;
-          
-          // 設定 CSS 顯示尺寸
-          this.canvas.style.width = screenWidth + 'px';
-          this.canvas.style.height = screenHeight + 'px';
-          
-          console.log('Canvas 實際尺寸:', this.canvas.width, 'x', this.canvas.height);
-          console.log('Canvas CSS 尺寸:', this.canvas.style.width, 'x', this.canvas.style.height);
-          console.log('Device Pixel Ratio:', this.dpr);
-          
-          // 設定 2D context 的縮放以匹配 DPI
-          this.ctx.scale(this.dpr, this.dpr);
-          
-          // 關閉圖片平滑以保持最高畫質（避免模糊）
-          this.ctx.imageSmoothingEnabled = false;
-          this.ctx.mozImageSmoothingEnabled = false;
-          this.ctx.webkitImageSmoothingEnabled = false;
-          this.ctx.msImageSmoothingEnabled = false;
-          
-          // 重置縮放（因為我們會在繪製時處理）
+        // 畫布：點陣尺寸 = 擷取的物理像素，CSS 尺寸 = 視窗 DIP（多螢幕/不同 DPR 時每次重設）
+        sizeCanvas(physicalW, physicalH) {
+          const w = Math.max(1, Math.round(physicalW));
+          const h = Math.max(1, Math.round(physicalH));
+          if (this.canvas.width !== w) this.canvas.width = w;
+          if (this.canvas.height !== h) this.canvas.height = h;
+          this.canvas.style.width = '100vw';
+          this.canvas.style.height = '100vh';
           this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+          this.ctx.imageSmoothingEnabled = false;
         }
 
         listenForScreenData() {
           window.electronAPI.onScreenData((screenData) => {
-            console.log('接收到螢幕數據');
             // 新路徑：主進程只給 sourceId，由本端用視訊流抓第一幀（快 ~700ms）；
             // 舊路徑（dataURL 字串）保留給連續截圖與 fallback
-            // 隱藏游標模式：覆蓋層套 cursor:none，硬體游標不會被串流截入，改用自訂準星對位
-            if (screenData && typeof screenData === 'object' && screenData.hideCursor) {
-              this.hideCursorMode = true;
-              document.body.classList.add('hide-cursor');
+            const isNewCapture = screenData && typeof screenData === 'object' && !!screenData.sourceId;
+            if (isNewCapture) {
+              this.resetState();
+              const seq = this.captureSeq;
+              // 不用 window.devicePixelRatio：highDpiCapture 關閉時幀是 DIP 尺寸、
+              // 跨螢幕搬移後 DPR/innerWidth 可能還是上一顆螢幕的值
+              const dipW = screenData.boundsWidth || window.innerWidth;
+              this.dpr = screenData.width / Math.max(1, dipW);
+              // 隱藏游標模式：覆蓋層套 cursor:none，硬體游標不會被串流截入，改用自訂準星對位
+              this.hideCursorMode = !!screenData.hideCursor;
+              document.body.classList.toggle('hide-cursor', this.hideCursorMode);
               // 記錄按下快捷鍵當下的游標座標，讓鴨鴨指標一出現就定位在游標處
               if (typeof screenData.cursorX === 'number') {
                 this.lastMouseX = screenData.cursorX;
                 this.lastMouseY = screenData.cursorY;
               }
-            }
-            if (screenData && typeof screenData === 'object' && screenData.sourceId) {
-              this.loadScreenFromStream(screenData);
+              this.sizeCanvas(screenData.width, screenData.height);
+              this.loadScreenFromStream(screenData, seq);
             } else {
-              this.loadHighResScreenImage(screenData);
+              this.captureSeq = (this.captureSeq || 0) + 1;
+              this.dpr = window.devicePixelRatio || 1;
+              this.sizeCanvas(window.innerWidth * this.dpr, window.innerHeight * this.dpr);
+              this.loadHighResScreenImage(screenData, this.captureSeq);
             }
           });
         }
 
         // 用 getUserMedia 桌面視訊流抓單幀，畫到 canvas 後立即停止串流
-        async loadScreenFromStream({ sourceId, width, height }) {
+        async loadScreenFromStream({ sourceId, width, height }, seq) {
           const t0 = Date.now();
           let stream = null;
+          const stale = () => seq !== this.captureSeq; // 使用者已按 Esc 或又開了新一輪
           try {
             stream = await navigator.mediaDevices.getUserMedia({
               audio: false,
@@ -746,6 +782,7 @@
               },
             });
 
+            const tStream = Date.now() - t0;
             const video = document.createElement('video');
             video.srcObject = stream;
             await new Promise((resolve, reject) => {
@@ -764,6 +801,7 @@
                 setTimeout(resolve, 50);
               }
             });
+            if (stale()) return;
 
             this.ctx.save();
             this.ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -772,10 +810,12 @@
             this.ctx.drawImage(video, 0, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
 
-            console.log(`[perf] 視訊流首幀繪製: ${Date.now() - t0}ms`);
+            console.log(`[perf] 視訊流首幀繪製: ${Date.now() - t0}ms（getUserMedia ${tStream}ms）`);
             this.showInitialDarkOverlay();
             this.enableCrosshair(); // 凍結幀已畫好，才開始顯示準星（確保準星不會被截入畫面）
+            this.notifyDrawn();
           } catch (error) {
+            if (stale()) return;
             console.error('視訊流擷取失敗，改用主進程縮圖後備路徑:', error);
             try { await window.electronAPI.capture.requestScreenDataFallback(); } catch (e) {
               console.error('後備路徑也失敗:', e);
@@ -785,28 +825,29 @@
           }
         }
 
-        loadHighResScreenImage(screenData) {
+        loadHighResScreenImage(screenData, seq) {
           const img = new Image();
 
           img.onload = () => {
+            if (seq !== this.captureSeq) return; // 已經被取消/換下一輪
             console.log('圖片載入完成');
             console.log('圖片原始尺寸:', img.naturalWidth, 'x', img.naturalHeight);
-            
+
             // 清除 canvas
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            
+
             // 保存當前狀態
             this.ctx.save();
-            
+
             // 重置變換矩陣，確保精確繪製
             this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-            
+
             // 判斷圖片和 canvas 的比例
             const scaleX = this.canvas.width / img.naturalWidth;
             const scaleY = this.canvas.height / img.naturalHeight;
-            
+
             console.log('縮放比例:', scaleX, 'x', scaleY);
-            
+
             // 根據比例選擇最佳繪製方式
             if (Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) < 0.001) {
               console.log('1:1 原生繪製（無縮放）');
@@ -815,7 +856,7 @@
               this.ctx.mozImageSmoothingEnabled = false;
               this.ctx.webkitImageSmoothingEnabled = false;
               this.ctx.msImageSmoothingEnabled = false;
-              
+
               // 直接 1:1 繪製
               this.ctx.drawImage(img, 0, 0);
             } else if (scaleX === scaleY && scaleX > 1) {
@@ -825,7 +866,7 @@
               this.ctx.mozImageSmoothingEnabled = false;
               this.ctx.webkitImageSmoothingEnabled = false;
               this.ctx.msImageSmoothingEnabled = false;
-              
+
               // 使用高品質縮放算法
               this.ctx.drawImage(
                 img,
@@ -837,24 +878,25 @@
               // 對於需要縮小的情況，使用高品質平滑處理
               this.ctx.imageSmoothingEnabled = true;
               this.ctx.imageSmoothingQuality = 'high';
-              
+
               // 繪製完整解析度圖片
               this.ctx.drawImage(
                 img,
                 0, 0, img.naturalWidth, img.naturalHeight,
                 0, 0, this.canvas.width, this.canvas.height
               );
-              
+
               // 繪製後立即關閉平滑，避免影響後續操作
               this.ctx.imageSmoothingEnabled = false;
             }
-            
+
             // 恢復狀態
             this.ctx.restore();
 
             // 顯示初始暗覆層
             this.showInitialDarkOverlay();
             this.enableCrosshair();
+            this.notifyDrawn();
           };
 
           img.onerror = (error) => {
@@ -873,21 +915,24 @@
           const lineV = document.getElementById('crosshairV');
           document.body.classList.add('crosshair-active');
           // 用 transform（GPU 合成、不重排）+ rAF 批次，滑鼠快速移動也不卡
-          let cx = (typeof this.lastMouseX === 'number') ? this.lastMouseX : window.innerWidth / 2;
-          let cy = (typeof this.lastMouseY === 'number') ? this.lastMouseY : window.innerHeight / 2;
-          let pending = false;
           const apply = () => {
-            pending = false;
+            this._crosshairPending = false;
+            const cx = (typeof this.lastMouseX === 'number') ? this.lastMouseX : window.innerWidth / 2;
+            const cy = (typeof this.lastMouseY === 'number') ? this.lastMouseY : window.innerHeight / 2;
             duck.style.transform = `translate(${cx}px, ${cy}px)`;
             lineH.style.transform = `translateY(${cy}px)`;
             lineV.style.transform = `translateX(${cx}px)`;
           };
           apply();
-          document.addEventListener('mousemove', (e) => {
-            cx = this.lastMouseX = e.clientX;
-            cy = this.lastMouseY = e.clientY;
-            if (!pending) { pending = true; requestAnimationFrame(apply); }
-          });
+          if (!this._crosshairListenerBound) {
+            this._crosshairListenerBound = true;
+            document.addEventListener('mousemove', (e) => {
+              this.lastMouseX = e.clientX;
+              this.lastMouseY = e.clientY;
+              if (!this._crosshairOn) return;
+              if (!this._crosshairPending) { this._crosshairPending = true; requestAnimationFrame(apply); }
+            });
+          }
         }
 
         showInitialDarkOverlay() {
@@ -910,13 +955,13 @@
           darkAreas.forEach(area => {
             // 確保暗區只有 crosshair 游標
             area.style.cursor = 'crosshair';
-            
+
             area.addEventListener('mousedown', (e) => {
               if (e.target === area) {
                 this.startNewSelection(e.clientX, e.clientY);
               }
             });
-            
+
             // 防止暗區顯示調整大小的游標
             area.addEventListener('mousemove', (e) => {
               if (e.target === area) {
@@ -928,7 +973,7 @@
           // 選取區域內容拖曳
           const selectionContent = this.selectionBox.querySelector('.selection-content');
           selectionContent.style.cursor = 'move';  // 確保游標為 move
-          
+
           selectionContent.addEventListener('mousedown', (e) => {
             if (e.target === selectionContent) {
               this.isDraggingSelection = true;
@@ -937,7 +982,7 @@
               e.stopPropagation();
             }
           });
-          
+
           // 當滑鼠進入選取區域時確保顯示正確的游標
           selectionContent.addEventListener('mouseenter', () => {
             if (!this.isResizing && !this.isSelecting) {
@@ -963,12 +1008,12 @@
             if (handle) {
               // 設定游標
               handle.style.cursor = handleInfo.cursor;
-              
+
               // 確保游標在懸停時顯示正確
               handle.addEventListener('mouseenter', () => {
                 handle.style.cursor = handleInfo.cursor;
               });
-              
+
               handle.addEventListener('mousedown', (e) => {
                 this.isResizing = true;
                 this.resizeHandle = handleInfo.class;
@@ -983,17 +1028,17 @@
           // 文檔級別的滑鼠事件
           document.addEventListener('mousemove', this.onMouseMove.bind(this));
           document.addEventListener('mouseup', this.onMouseUp.bind(this));
-          
+
           // 鍵盤事件
           document.addEventListener('keydown', this.onKeyDown.bind(this));
-          
+
           // 工具列按鈕
           document.getElementById('copyBtn').addEventListener('click', () => this.copyToClipboard());
           document.getElementById('saveBtn').addEventListener('click', () => this.saveScreenshot());
           document.getElementById('uploadBtn').addEventListener('click', () => this.uploadScreenshot());
           document.getElementById('continueBtn').addEventListener('click', () => this.continueCapture());
           document.getElementById('ocrBtn').addEventListener('click', () => this.ocrScreenshot());
-          document.getElementById('cancelBtn').addEventListener('click', () => window.close());
+          document.getElementById('cancelBtn').addEventListener('click', () => this.dismiss());
 
           // 右鍵行為（雙右鍵才退出）：
           // - 若已有選取：清除選取（重抓），不退出
@@ -1041,7 +1086,7 @@
               }, 1500);
             } else {
               // 已武裝 → 第二次右鍵，關閉
-              window.close();
+              this.dismiss();
             }
           });
         }
@@ -1051,7 +1096,7 @@
           this.dragStartX = x;
           this.dragStartY = y;
           this.selection = { x, y, width: 0, height: 0 };
-          
+
           // 隱藏工具列
           this.toolbar.style.display = 'none';
           document.querySelector('.help-text').style.display = 'none';
@@ -1064,7 +1109,7 @@
             // 確保暗區保持 crosshair 游標
             area.style.cursor = 'crosshair';
           });
-          
+
           if (!this.selection) {
             // 全螢幕暗化
             darkAreas.forEach(area => {
@@ -1082,15 +1127,15 @@
             });
             return;
           }
-          
+
           const { x, y, width, height } = this.selection;
-          
+
           // 根據位置設定不同暗區
           darkAreas.forEach(area => {
             const areaType = area.dataset.area;
             area.style.display = 'block';
             area.style.cursor = 'crosshair'; // 強制設定游標
-            
+
             switch (areaType) {
               case 'top':
                 area.style.cssText = `top: 0; left: 0; width: 100%; height: ${y}px; cursor: crosshair;`;
@@ -1110,15 +1155,15 @@
 
         updateSelectionBox() {
           if (!this.selection) return;
-          
+
           const { x, y, width, height } = this.selection;
-          
+
           this.selectionBox.style.left = x + 'px';
           this.selectionBox.style.top = y + 'px';
           this.selectionBox.style.width = width + 'px';
           this.selectionBox.style.height = height + 'px';
           this.selectionBox.classList.add('active');
-          
+
           this.updateDarkAreaPaths();
         }
 
@@ -1127,20 +1172,20 @@
             this.dimensionDisplay.style.display = 'none';
             return;
           }
-          
+
           const { x, y, width, height } = this.selection;
-          
+
           // 顯示實際像素尺寸（考慮 DPI）
           const actualWidth = Math.round(width * this.dpr);
           const actualHeight = Math.round(height * this.dpr);
-          
+
           this.dimensionDisplay.textContent = `${actualWidth} × ${actualHeight} px`;
           this.dimensionDisplay.style.display = 'block';
-          
+
           // 位置在選區右上角
           let displayX = x + width + 10;
           let displayY = y;
-          
+
           // 邊界檢查
           if (displayX + 150 > window.innerWidth) {
             displayX = x - 160;
@@ -1148,7 +1193,7 @@
           if (displayY < 10) {
             displayY = 10;
           }
-          
+
           this.dimensionDisplay.style.left = displayX + 'px';
           this.dimensionDisplay.style.top = displayY + 'px';
         }
@@ -1168,10 +1213,10 @@
           if (this.isDraggingSelection && this.selection) {
             // 拖曳選取區域時保持 move 游標
             document.body.style.cursor = 'move';
-            
+
             // 移動時隱藏工具列避免擋住視線
             this.toolbar.style.display = 'none';
-            
+
             this.selection.x = Math.max(0, Math.min(window.innerWidth - this.selection.width, e.clientX - this.dragStartX));
             this.selection.y = Math.max(0, Math.min(window.innerHeight - this.selection.height, e.clientY - this.dragStartY));
             this.updateSelectionBox();
@@ -1180,10 +1225,10 @@
           } else if (this.isResizing && this.selection && this.resizeStartSelection) {
             const dx = e.clientX - this.resizeStartX;
             const dy = e.clientY - this.resizeStartY;
-            
+
             // 調整大小時隱藏工具列
             this.toolbar.style.display = 'none';
-            
+
             // 根據控制點調整選區
             this.adjustSelection(this.resizeHandle, dx, dy);
             this.updateSelectionBox();
@@ -1194,7 +1239,7 @@
             const height = Math.abs(e.clientY - this.dragStartY);
             const x = Math.min(e.clientX, this.dragStartX);
             const y = Math.min(e.clientY, this.dragStartY);
-            
+
             this.selection = { x, y, width, height };
             this.updateSelectionBox();
             this.updateDimensionDisplay();
@@ -1207,7 +1252,7 @@
           let newY = original.y;
           let newWidth = original.width;
           let newHeight = original.height;
-          
+
           switch (handle) {
             case 'top-left':
               newX = original.x + dx;
@@ -1244,11 +1289,11 @@
               newHeight = original.height + dy;
               break;
           }
-          
+
           // 確保最小尺寸
           if (newWidth < 10) newWidth = 10;
           if (newHeight < 10) newHeight = 10;
-          
+
           // 邊界檢查
           if (newX < 0) {
             newWidth += newX;
@@ -1264,7 +1309,7 @@
           if (newY + newHeight > window.innerHeight) {
             newHeight = window.innerHeight - newY;
           }
-          
+
           this.selection = {
             x: Math.round(newX),
             y: Math.round(newY),
@@ -1282,17 +1327,17 @@
               this.showToolbar();
             }
           }
-          
+
           // 拖曳或調整大小結束後，重新顯示工具列
           if ((this.isDraggingSelection || this.isResizing) && this.selection) {
             this.showToolbar();
           }
-          
+
           // 重置游標
           if (this.isDraggingSelection || this.isResizing) {
             document.body.style.cursor = '';
           }
-          
+
           this.isSelecting = false;
           this.isDraggingSelection = false;
           this.isResizing = false;
@@ -1302,7 +1347,7 @@
 
         onKeyDown(e) {
           if (e.key === 'Escape') {
-            window.close();
+            this.dismiss();
           } else if (e.key === 'Enter' && this.selection) {
             this.saveScreenshot();
           } else if ((e.ctrlKey || e.metaKey) && e.key === 'c' && this.selection) {
@@ -1451,104 +1496,63 @@
           this.toolbar.style.top = `${chosen.top}px`;
         }
 
+        // 把目前選區從高解析 canvas 複製到一張剛好大小的 canvas（1:1 物理像素、不平滑）
+        drawSelectionToCanvas() {
+          const tempCanvas = document.createElement('canvas');
+          const tempCtx = tempCanvas.getContext('2d');
+          tempCanvas.width = Math.max(1, Math.round(this.selection.width * this.dpr));
+          tempCanvas.height = Math.max(1, Math.round(this.selection.height * this.dpr));
+          tempCtx.imageSmoothingEnabled = false;
+          tempCtx.drawImage(
+            this.canvas,
+            this.selection.x * this.dpr,
+            this.selection.y * this.dpr,
+            this.selection.width * this.dpr,
+            this.selection.height * this.dpr,
+            0, 0, tempCanvas.width, tempCanvas.height
+          );
+          return tempCanvas;
+        }
+
+        // 選區 → PNG 位元組（ArrayBuffer）。toBlob 在背景執行緒編碼，不像 toDataURL 會卡主執行緒，
+        // 而且不用 base64（省 33% 記憶體與一次編解碼）。
+        async selectionToPng() {
+          const canvas = this.drawSelectionToCanvas();
+          const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+          if (!blob) throw new Error('PNG 編碼失敗');
+          return blob.arrayBuffer();
+        }
+
         async copyToClipboard() {
           if (!this.selection) return;
-          
           try {
-            const tempCanvas = document.createElement('canvas');
-            const tempCtx = tempCanvas.getContext('2d');
-            
-            // 設定高解析度尺寸
-            tempCanvas.width = this.selection.width * this.dpr;
-            tempCanvas.height = this.selection.height * this.dpr;
-            
-            // 關閉圖片平滑以保持最高品質（避免模糊）
-            tempCtx.imageSmoothingEnabled = false;
-            tempCtx.mozImageSmoothingEnabled = false;
-            tempCtx.webkitImageSmoothingEnabled = false;
-            tempCtx.msImageSmoothingEnabled = false;
-            
-            // 從高解析度 canvas 擷取
-            tempCtx.drawImage(
-              this.canvas,
-              this.selection.x * this.dpr,
-              this.selection.y * this.dpr,
-              this.selection.width * this.dpr,
-              this.selection.height * this.dpr,
-              0,
-              0,
-              tempCanvas.width,
-              tempCanvas.height
-            );
-            
-            // 用主進程剪貼簿寫入影像（不需視窗焦點）
-            try {
-              const dataUrl = tempCanvas.toDataURL('image/png');
-              await window.electronAPI.clipboard.writeImage(dataUrl);
-            } catch (e) {
-              try {
-                await new Promise((resolve) => tempCanvas.toBlob(async (blob) => {
-                  try { await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]); } catch {}
-                  resolve();
-                }));
-              } catch {}
-            }
-            window.close();
+            const bytes = await this.selectionToPng();
+            const r = await window.electronAPI.clipboard.writeImage(bytes);
+            if (!r || !r.success) throw new Error((r && r.error) || 'clipboard failed');
+            this.dismiss();
           } catch (error) {
             console.error('複製到剪貼簿失敗:', error);
+            // 退路：瀏覽器剪貼簿
+            try {
+              const canvas = this.drawSelectionToCanvas();
+              await new Promise((resolve) => canvas.toBlob(async (blob) => {
+                try { await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]); } catch {}
+                resolve();
+              }));
+            } catch {}
+            this.dismiss();
           }
         }
 
         async saveScreenshot() {
           if (!this.selection) return;
-          
           try {
-            const tempCanvas = document.createElement('canvas');
-            const tempCtx = tempCanvas.getContext('2d');
-            
-            // 設定高解析度尺寸
-            tempCanvas.width = this.selection.width * this.dpr;
-            tempCanvas.height = this.selection.height * this.dpr;
-            
-            console.log('儲存截圖 - Canvas 尺寸:', tempCanvas.width, 'x', tempCanvas.height);
-            
-            // 關閉圖片平滑以保持最高銳利度
-            tempCtx.imageSmoothingEnabled = false;
-            tempCtx.mozImageSmoothingEnabled = false;
-            tempCtx.webkitImageSmoothingEnabled = false;
-            tempCtx.msImageSmoothingEnabled = false;
-            
-            // 從高解析度 canvas 擷取正確的區域
-            tempCtx.drawImage(
-              this.canvas,
-              this.selection.x * this.dpr,
-              this.selection.y * this.dpr,
-              this.selection.width * this.dpr,
-              this.selection.height * this.dpr,
-              0,
-              0,
-              tempCanvas.width,
-              tempCanvas.height
-            );
-            
-            // 轉換為高品質 PNG（PNG 不需要品質參數）
-            const imageData = tempCanvas.toDataURL('image/png');
-            const result = await window.electronAPI.saveScreenshot(imageData, 'png');
-
+            const bytes = await this.selectionToPng();
+            const result = await window.electronAPI.saveScreenshot(bytes, 'png');
             if (result.success) {
-              console.log('截圖儲存成功');
-              // 儲存的同時也複製到剪貼簿（用主進程剪貼簿，不需視窗焦點）
-              try {
-                await window.electronAPI.clipboard.writeImage(imageData);
-              } catch (e) {
-                try {
-                  await new Promise((resolve) => tempCanvas.toBlob(async (blob) => {
-                    try { await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]); } catch {}
-                    resolve();
-                  }));
-                } catch {}
-              }
-              window.close();
+              // 儲存的同時也複製到剪貼簿（同一份位元組，不重新編碼）
+              try { await window.electronAPI.clipboard.writeImage(bytes); } catch {}
+              this.dismiss();
             } else {
               console.error('截圖儲存失敗:', result.error);
             }
@@ -1562,31 +1566,9 @@
           if (!this.selection) return;
 
           try {
-            const tempCanvas = document.createElement('canvas');
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCanvas.width = this.selection.width * this.dpr;
-            tempCanvas.height = this.selection.height * this.dpr;
-
-            tempCtx.imageSmoothingEnabled = false;
-            tempCtx.mozImageSmoothingEnabled = false;
-            tempCtx.webkitImageSmoothingEnabled = false;
-            tempCtx.msImageSmoothingEnabled = false;
-
-            tempCtx.drawImage(
-              this.canvas,
-              this.selection.x * this.dpr,
-              this.selection.y * this.dpr,
-              this.selection.width * this.dpr,
-              this.selection.height * this.dpr,
-              0,
-              0,
-              tempCanvas.width,
-              tempCanvas.height
-            );
-
             // 1) 存檔目前這張
-            const imageData = tempCanvas.toDataURL('image/png');
-            const result = await window.electronAPI.saveScreenshot(imageData, 'png');
+            const bytes = await this.selectionToPng();
+            const result = await window.electronAPI.saveScreenshot(bytes, 'png');
             if (!result || !result.success) {
               console.error('繼續截圖：存檔失敗', result && result.error);
               return;
@@ -1606,20 +1588,7 @@
         async ocrScreenshot() {
           if (!this.selection) return;
           try {
-            const tempCanvas = document.createElement('canvas');
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCanvas.width = this.selection.width * this.dpr;
-            tempCanvas.height = this.selection.height * this.dpr;
-            tempCtx.imageSmoothingEnabled = false;
-            tempCtx.drawImage(
-              this.canvas,
-              this.selection.x * this.dpr,
-              this.selection.y * this.dpr,
-              this.selection.width * this.dpr,
-              this.selection.height * this.dpr,
-              0, 0, tempCanvas.width, tempCanvas.height
-            );
-            const imageData = tempCanvas.toDataURL('image/png');
+            const imageData = this.drawSelectionToCanvas().toDataURL('image/png');
             // UIA 需要螢幕座標：overlay 全螢幕覆蓋，選取座標即螢幕座標（加上視窗原點防多螢幕）
             const screenBounds = {
               x: Math.round(window.screenX + this.selection.x),
@@ -1628,7 +1597,7 @@
               height: Math.round(this.selection.height),
             };
             await window.electronAPI.ocr.recognize(imageData, screenBounds);
-            window.close();
+            this.dismiss();
           } catch (error) {
             console.error('文字辨識失敗:', error);
           }
@@ -1636,43 +1605,13 @@
 
         async uploadScreenshot() {
           if (!this.selection) return;
-          
+
           try {
             // 顯示載入狀態
             this.showUploadModal('loading');
-            
-            // 創建臨時 canvas 獲取選取區域
-            const tempCanvas = document.createElement('canvas');
-            const tempCtx = tempCanvas.getContext('2d');
-            
-            tempCanvas.width = this.selection.width * this.dpr;
-            tempCanvas.height = this.selection.height * this.dpr;
-            
-            // 關閉圖片平滑以保持最高品質
-            tempCtx.imageSmoothingEnabled = false;
-            tempCtx.mozImageSmoothingEnabled = false;
-            tempCtx.webkitImageSmoothingEnabled = false;
-            tempCtx.msImageSmoothingEnabled = false;
-            
-            tempCtx.drawImage(
-              this.canvas,
-              this.selection.x * this.dpr,
-              this.selection.y * this.dpr,
-              this.selection.width * this.dpr,
-              this.selection.height * this.dpr,
-              0,
-              0,
-              tempCanvas.width,
-              tempCanvas.height
-            );
-            
-            // 轉換為 Blob（PNG 格式使用最高品質）
-            const blob = await new Promise(resolve => {
-              tempCanvas.toBlob(resolve, 'image/png');
-            });
-            
+
             // 由主進程代理上傳（避免 CORS/403）
-            const bytes = await blob.arrayBuffer();
+            const bytes = await this.selectionToPng();
             // 嘗試從設定讀取 API Key（不存在也可正常上傳）
             let apiKey;
             try {
@@ -1708,7 +1647,7 @@
         showUploadModal(state, data = null) {
           const modal = this.uploadModal;
           const content = document.getElementById('uploadModalContent');
-          
+
           switch (state) {
             case 'loading':
               content.innerHTML = `
@@ -1720,7 +1659,7 @@
                 </div>
               `;
               break;
-              
+
             case 'success':
               content.innerHTML = `
                 <div class="upload-title upload-success">✓ 上傳成功！</div>
@@ -1739,11 +1678,11 @@
                   </div>
                 </div>` : ''}
                 <div class="modal-buttons">
-                  <button class="modal-btn modal-btn-primary" onclick="window.close()">完成</button>
+                  <button class="modal-btn modal-btn-primary" onclick="window.captureSystem.dismiss()">完成</button>
                 </div>
               `;
               break;
-              
+
             case 'error':
               content.innerHTML = `
                 <div class="upload-title upload-error">✗ 上傳失敗</div>
@@ -1755,10 +1694,10 @@
               `;
               break;
           }
-          
+
           // 顯示彈窗
           modal.classList.add('show');
-          
+
           // 綁定點擊背景關閉
           modal.onclick = (e) => {
             if (e.target === modal && state !== 'loading') {

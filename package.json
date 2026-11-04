@@ -33,7 +33,8 @@
     "clipboardy": "^4.0.0",
     "electron": "^38.1.2",
     "electron-builder": "^26.0.12",
-    "electron-store": "^10.1.0"
+    "electron-store": "^10.1.0",
+    "lucide-static": "^1.68.0"
   },
   "build": {
     "appId": "tw.duk.duckshot",

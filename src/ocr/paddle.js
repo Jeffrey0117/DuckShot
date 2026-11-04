@@ -89,4 +89,9 @@ async function recognizeWithPaddleOcr(imageData) {
   }
 }
 
-module.exports = { recognizeWithPaddleOcr };
+// 實例是否已初始化（textExtractor 用來決定要不要跟 UIA 並行）
+function isWarm() {
+  return !!ocrInstance;
+}
+
+module.exports = { recognizeWithPaddleOcr, isWarm };

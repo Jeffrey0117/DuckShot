@@ -32,28 +32,22 @@ async function preprocessImage(base64Image, options) {
   }
 
   // 計算原始圖片特徵
-  let hasColoredText = false;
+  // 只需要「彩色像素數」：直接走 bitmap 計數，不用 scan() callback 也不堆陣列
   let colorVariance = 0;
-  const colorSamples = [];
-
-  image.scan((_x, _y, idx) => {
-    const r = image.bitmap.data[idx + 0];
-    const g = image.bitmap.data[idx + 1];
-    const b = image.bitmap.data[idx + 2];
-
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const saturation = max === 0 ? 0 : (max - min) / max;
-
-    // 記錄飽和度高的像素數量
-    if (saturation > 0.4 && max > 50) {
-      colorSamples.push(saturation);
+  {
+    const data = image.bitmap.data;
+    for (let idx = 0; idx < data.length; idx += 4) {
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const max = r > g ? (r > b ? r : b) : g > b ? g : b;
+      const min = r < g ? (r < b ? r : b) : g < b ? g : b;
+      if (max > 50 && (max - min) / max > 0.4) colorVariance += 1;
     }
-  });
+  }
 
   // 如果彩色像素佔比高，可能是藝術字，不要過濾顏色
-  hasColoredText = colorSamples.length > image.width * image.height * 0.05;
-  colorVariance = colorSamples.length;
+  const hasColoredText = colorVariance > image.width * image.height * 0.05;
 
   console.log(`Preprocess: coloredPixels=${colorVariance}, hasColoredText=${hasColoredText}`);
 
