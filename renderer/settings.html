@@ -248,7 +248,7 @@
           </label>
         </div>
       </div>
-      
+
       <div class="shortcuts-list" id="shortcuts-list">
         <div class="shortcut-item">
           <span class="shortcut-name">區域截圖</span>
@@ -264,7 +264,7 @@
             </div>
           </div>
         </div>
-        
+
         <div class="shortcut-item">
           <span class="shortcut-name">全螢幕截圖</span>
           <div class="shortcut-controls">
@@ -279,7 +279,7 @@
             </div>
           </div>
         </div>
-        
+
         <div class="shortcut-item">
           <span class="shortcut-name">視窗截圖</span>
           <div class="shortcut-controls">
@@ -330,6 +330,44 @@
         </div>
         <div class="setting-control">
           <input type="password" id="gemini-api-key" class="shortcut-input" style="width: 240px;" placeholder="AIza...">
+        </div>
+      </div>
+    </div>
+
+    <!-- 上傳圖床 -->
+    <div class="settings-section">
+      <h3>上傳圖床</h3>
+      <div style="margin: 6px 0 0 0; color: var(--text-secondary); font-size: 12px;">
+        順序固定：URUSAI!（免費、匿名）優先；失敗才改用 duk.tw 備援。duk.tw 要填 API 金鑰才會啟用。
+      </div>
+      <div class="setting-item">
+        <div class="setting-label">
+          <span class="label-text">URUSAI! Token</span>
+          <span class="label-description">選填。沒填就匿名上傳</span>
+        </div>
+        <div class="setting-control">
+          <input type="password" id="urusai-token" class="shortcut-input" style="width: 240px;" placeholder="（選填）">
+        </div>
+      </div>
+      <div class="setting-item">
+        <div class="setting-label">
+          <span class="label-text">duk.tw API 金鑰</span>
+          <span class="label-description">選填。填了之後 URUSAI! 失敗時自動改用 duk.tw</span>
+        </div>
+        <div class="setting-control">
+          <input type="password" id="duk-api-key" class="shortcut-input" style="width: 240px;" placeholder="x-api-key">
+        </div>
+      </div>
+      <div class="setting-item">
+        <div class="setting-label">
+          <span class="label-text">啟用 duk.tw 備援</span>
+          <span class="label-description">關閉後即使有金鑰也不會用自家圖床</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="duk-enabled">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>
     </div>

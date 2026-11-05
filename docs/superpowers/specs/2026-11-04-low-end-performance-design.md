@@ -80,3 +80,12 @@ code review 抓到的問題與處置：
 - **OCR 冷啟動**：UIA 先跑 1.5 秒內成功就不碰 Paddle；超過 1.5 秒 Paddle 提前並行開跑（不再最壞等 UIA 10 秒）。
 - `save-screenshot` 加來源視窗檢查與 64MB 上限；覆蓋層載入失敗/逾時會 reject 並重建；保留 `--disable-gpu-sandbox`；合成器等待維持 56ms。
 - 未處理（已知）：`getUserMedia` 桌面擷取啟動偶發 1~3 秒（OS 層，舊版同樣存在）。
+
+## 6. 上傳鏈（2026-11-06，Jeff 定案）
+
+- 順序固定 **URUSAI!（第三方、免費匿名）→ duk.tw（自家）備援**。自家只在真的需要時用：設定頁填 `x-api-key` 才啟用，另有「啟用 duk.tw 備援」開關。
+- 實作 `src/upload/providers.js`：`buildProviderChain(settings, env)` + `uploadWithFallback(providers, ctx)`，fetch 注入（主進程用 `net.fetch`，測試用假的）。任一家失敗（HTTP 錯、逾時、回應格式不符）換下一家；全失敗回 `上傳失敗（urusai: …；duk: …）`。
+- duk.tw 契約（upimg CLAUDE.md）：multipart 欄位 `image`、header `x-api-key`、回 `{ shortUrl }`。
+- 設定存 `settings.upload = { urusaiToken, dukApiKey, dukEnabled }`，相容舊頂層 `urusaiToken` / `dukApiKey` 與 env `URUSAI_TOKEN` / `UPIMG_UPLOAD_KEY`。
+- 設定頁新增「上傳圖床」區塊；上傳成功彈窗顯示用了哪家。
+- `upload-duk` IPC 加來源視窗檢查與 64MB 上限。

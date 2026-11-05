@@ -29,7 +29,7 @@ class SettingsManager {
       fullscreen: { default: 'PrintScreen', current: 'PrintScreen' },
       window: { default: 'Alt+W', current: 'Alt+W' }
     };
-    
+
     this.init();
   }
 
@@ -187,6 +187,18 @@ class SettingsManager {
       this.settings.geminiApiKey = e.target.value.trim();
     });
 
+    // 上傳圖床：URUSAI token / duk.tw 金鑰 / duk.tw 備援開關（寫在 settings.upload 底下）
+    const uploadCfg = () => (this.settings.upload = this.settings.upload || {});
+    document.getElementById('urusai-token').addEventListener('change', (e) => {
+      uploadCfg().urusaiToken = e.target.value.trim();
+    });
+    document.getElementById('duk-api-key').addEventListener('change', (e) => {
+      uploadCfg().dukApiKey = e.target.value.trim();
+    });
+    document.getElementById('duk-enabled').addEventListener('change', (e) => {
+      uploadCfg().dukEnabled = e.target.checked;
+    });
+
     document.getElementById('open-save-dir').addEventListener('click', async () => {
       try {
         const dir = document.getElementById('save-directory').value;
@@ -224,9 +236,9 @@ class SettingsManager {
 
     // 更新快捷鍵設定
     if (this.settings.shortcuts) {
-      document.getElementById('enable-global-shortcuts').checked = 
+      document.getElementById('enable-global-shortcuts').checked =
         this.settings.shortcuts.enabled !== false;
-      
+
       ['region', 'fullscreen', 'window'].forEach(type => {
         const shortcut = this.settings.shortcuts[type];
         if (shortcut) {
@@ -254,6 +266,15 @@ class SettingsManager {
     if (geminiInput) {
       geminiInput.value = this.settings.geminiApiKey || '';
     }
+
+    // 上傳圖床（相容舊的頂層鍵名）
+    const upload = this.settings.upload || {};
+    const urusaiInput = document.getElementById('urusai-token');
+    if (urusaiInput) urusaiInput.value = upload.urusaiToken || this.settings.urusaiToken || '';
+    const dukInput = document.getElementById('duk-api-key');
+    if (dukInput) dukInput.value = upload.dukApiKey || this.settings.dukApiKey || '';
+    const dukEnabled = document.getElementById('duk-enabled');
+    if (dukEnabled) dukEnabled.checked = upload.dukEnabled !== false;
   }
 
   async loadSaveDirectory() {
@@ -288,11 +309,11 @@ class SettingsManager {
     const input = document.getElementById(`shortcut-${type}-key`);
     input.classList.add('recording');
     input.value = '請按下組合鍵...';
-    
+
     // 監聽按鍵
     const keyHandler = (e) => {
       e.preventDefault();
-      
+
       if (e.key === 'Escape') {
         this.cancelRecording();
         return;
@@ -301,7 +322,7 @@ class SettingsManager {
       const modifiers = [];
       // 根據系統使用正確的修飾鍵名稱（統一顯示為 Ctrl/Alt/Shift/Super/Command）
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-      
+
       if (e.ctrlKey) modifiers.push('Ctrl');
       if (e.altKey) modifiers.push('Alt');
       if (e.shiftKey) modifiers.push('Shift');
@@ -310,7 +331,7 @@ class SettingsManager {
 
       // 獲取實際按鍵
       let key = e.key;
-      
+
       // 處理特殊字元和按鍵
       if (key === ' ') key = 'Space';
       else if (key === '`') key = 'Backquote';  // 反引號鍵
@@ -360,17 +381,17 @@ class SettingsManager {
 
       // 組合快捷鍵字串（修飾鍵 + 主鍵）
       const shortcut = [...modifiers, key].join('+');
-      
+
       // 允許的單鍵或組合鍵（仍保留提示規則）
       const allowedSingleKeys = [
         'F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12',
         'PrintScreen','Insert','Delete','Home','End','PageUp','PageDown',
         'Tab','Backquote','Escape','Pause','ScrollLock','NumLock'
       ];
-      
+
       // 需要至少一個修飾鍵的按鍵
       const requiresModifier = !allowedSingleKeys.includes(key);
-      
+
       if (!requiresModifier || modifiers.length > 0) {
         // 有修飾鍵或是允許的單鍵
         this.setShortcut(type, shortcut);

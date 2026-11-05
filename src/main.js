@@ -16,6 +16,7 @@ const os = require("os");
 const { moveFile } = require("./lib/moveFile");
 const { listImages, imageEntryId } = require("./lib/listImages");
 const { createSaveDirResolver } = require("./lib/saveDir");
+const { buildProviderChain, uploadWithFallback } = require("./upload/providers");
 
 app.commandLine.appendSwitch('--disable-gpu-sandbox');
 // 常駐的覆蓋層視窗在背景時不能被節流（否則 show 出來第一幀會延遲）
@@ -1591,72 +1592,45 @@ class DukshotApp {
     });
 
     // 由主進程代理上傳圖片（避免 CORS / TLS 攔截）。
-    // TODO（未來）：將上傳改為「多供應商備援鏈」——依序嘗試多個圖床，
-    //   任一家失敗就自動換下一家，避免單一服務中斷時無法取得分享連結。
-    //   （截圖本身一律已存本機，故此功能不影響資料安全，只影響分享連結。）
-    ipcMain.handle("upload-duk", async (_event, payload) => {
+    // 供應商鏈：URUSAI!（第三方、免費匿名）優先 → duk.tw（自家）只當備援，且要在設定頁填 API 金鑰才啟用。
+    // 任一家失敗自動換下一家；截圖本身一律已存本機，這裡只影響分享連結。
+    ipcMain.handle("upload-duk", async (event, payload) => {
       try {
+        if (!this.isTrustedSender(event.sender)) return { success: false, error: "拒絕的來源" };
         const { bytes, filename, contentType, apiKey } = payload || {};
-        if (!bytes) {
-          return { success: false, error: "缺少圖片位元組" };
+        if (!bytes) return { success: false, error: "缺少圖片位元組" };
+        const buffer = toImageBuffer(bytes);
+        if (buffer.length > 64 * 1024 * 1024) return { success: false, error: "圖片過大" };
+
+        // 渲染端傳入的金鑰（舊介面）視為 URUSAI token 覆寫
+        const settings = { ...store.store };
+        if (apiKey && typeof apiKey === "string" && apiKey.trim()) {
+          settings.upload = { ...(settings.upload || {}), urusaiToken: apiKey.trim() };
         }
-        // Node 18+ 原生支援 Blob/FormData/fetch
-        const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-        const blob = new Blob([buffer], { type: contentType || "image/png" });
-
-        // URUSAI! 圖床 API：multipart/form-data，欄位名為 file，token 選填（無則匿名上傳）
-        const form = new FormData();
-        form.append("file", blob, filename || "screenshot.png");
-        form.append("r18", "0");
-
-        // token 選填（優先序：渲染端傳入 > 環境變數 > 設定檔）；沒有就匿名上傳
-        const storedToken =
-          (typeof store?.get === "function" &&
-            (store.get("urusaiToken") || (store.get("upload") && store.get("upload").urusaiToken))) ||
-          null;
-        const token =
-          (apiKey && typeof apiKey === "string" && apiKey.trim()) ||
-          (process.env.URUSAI_TOKEN && String(process.env.URUSAI_TOKEN).trim()) ||
-          storedToken ||
-          "";
-        if (token) form.append("token", token);
-
-        const headers = {
-          Accept: "application/json",
-          "User-Agent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 DuckShot/${app.getVersion?.() || "1.0"}`,
-        };
+        const chain = buildProviderChain(settings, process.env);
 
         // 使用 Electron net.fetch（走 Chromium 網路層 + 系統憑證庫），
         // 才能穿過某些環境（防毒／企業代理）的 TLS 攔截，避免 "fetch failed"。
-        // 加 60 秒逾時，避免網路異常時無限轉圈。
-        let res;
-        try {
-          res = await net.fetch("https://api.urusai.cc/v1/upload", {
-            method: "POST",
-            headers,
-            body: form,
-            signal: AbortSignal.timeout(60000),
-          });
-        } catch (fe) {
-          if (fe && (fe.name === "TimeoutError" || fe.name === "AbortError")) {
-            return { success: false, error: "上傳逾時（網路太慢或檔案過大），請再試一次" };
-          }
-          throw fe;
+        const result = await uploadWithFallback(chain, {
+          bytes: buffer,
+          filename: filename || "screenshot.png",
+          contentType: contentType || "image/png",
+          fetch: (url, init) => net.fetch(url, init),
+          version: app.getVersion?.() || "1.0",
+        });
+        if (result.attempts.some((a) => a.error)) {
+          console.warn("[upload] 前面的圖床失敗，已改用", result.provider, result.attempts);
         }
-
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return { success: false, status: res.status, error: `HTTP ${res.status}`, body: body.slice(0, 500) };
-        }
-
-        const json = await res.json().catch(() => ({}));
-        const url = json?.data?.url_direct;
-        if (json?.status !== "success" || !url) {
-          return { success: false, error: json?.message || "上傳失敗（回應格式不符）", raw: json };
-        }
-        return { success: true, url, deleteUrl: json?.data?.url_delete, raw: json };
+        return {
+          success: true,
+          url: result.url,
+          deleteUrl: result.deleteUrl,
+          provider: result.provider,
+          providerLabel: result.label,
+          raw: result.raw,
+        };
       } catch (e) {
-        return { success: false, error: e.message };
+        return { success: false, error: e.message, attempts: e.attempts || [] };
       }
     });
 

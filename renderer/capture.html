@@ -1630,7 +1630,7 @@
 
             const dukUrl = result.url;
 
-            this.showUploadModal('success', { url: dukUrl });
+            this.showUploadModal('success', { url: dukUrl, providerLabel: result.providerLabel });
 
             // 自動複製直連到剪貼簿（用主進程剪貼簿，避免視窗失焦報錯）
             try {
@@ -1664,7 +1664,7 @@
               content.innerHTML = `
                 <div class="upload-title upload-success">✓ 上傳成功！</div>
                 <div style="color: #28a745; text-align: center; margin: 20px 0; font-size: 16px;">
-                  圖片已成功上傳<br>
+                  圖片已成功上傳${data?.providerLabel ? `到 ${data.providerLabel}` : ''}<br>
                   <span style="font-size: 14px; color: #666; margin-top: 8px; display: block;">
                     連結已複製到剪貼簿
                   </span>
