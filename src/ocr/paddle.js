@@ -19,7 +19,9 @@ async function getOcrInstance() {
       console.log("Initializing PaddleOCR...");
       // @gutenye/ocr-node 是 ESM，需動態 import
       const { default: Ocr } = await import("@gutenye/ocr-node");
-      const instance = await Ocr.create();
+      // 模型路徑必須明確指到 app.asar.unpacked：onnxruntime 是原生碼直接 fopen，
+      // 拿到 app.asar 內的路徑會 "File doesn't exist"（打包版 Paddle 從來沒成功過的根因）
+      const instance = await Ocr.create({ models: resolveModelPaths() });
       console.log("PaddleOCR initialized successfully");
       return instance;
     })().catch((error) => {
@@ -31,6 +33,20 @@ async function getOcrInstance() {
 
   ocrInstance = await initPromise;
   return ocrInstance;
+}
+
+// 找出 @gutenye/ocr-models 的 assets 目錄；在 asar 內就改指 app.asar.unpacked（electron-builder asarUnpack 會放那裡）
+function resolveModelPaths() {
+  // package.json 不在 exports 內，改解析有匯出的 ./node 入口來找套件目錄
+  const entry = require.resolve("@gutenye/ocr-models/node");
+  const assets = path
+    .join(path.dirname(entry), "assets")
+    .replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+  return {
+    detectionPath: path.join(assets, "ch_PP-OCRv4_det_infer.onnx"),
+    recognitionPath: path.join(assets, "ch_PP-OCRv4_rec_infer.onnx"),
+    dictionaryPath: path.join(assets, "ppocr_keys_v1.txt"),
+  };
 }
 
 // 使用 PaddleOCR 辨識圖片（imageData：base64，可帶或不帶 data URL prefix）
@@ -94,4 +110,4 @@ function isWarm() {
   return !!ocrInstance;
 }
 
-module.exports = { recognizeWithPaddleOcr, isWarm };
+module.exports = { recognizeWithPaddleOcr, isWarm, resolveModelPaths };

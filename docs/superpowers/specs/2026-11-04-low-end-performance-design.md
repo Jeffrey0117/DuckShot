@@ -97,3 +97,14 @@ code review 抓到的問題與處置：
 - 安裝＝抓 GitHub release 最新 `*-Setup-*.exe`、串流下載到 `userData/family-kit/installers`（進度回報、大小驗證）、`shell.openPath` 啟動安裝程式。app 自己寫檔不帶 MotW，SmartScreen 不跳；UAC 仍會問。
 - 清單 `family.json` 放 family-kit repo（raw），各 app 快取 1 小時、抓不到用快取、再沒有用內建；多一個 app 只改那份 JSON。
 - DuckShot 放兩處：設定頁最底下（主要入口）、圖庫空狀態（只在空狀態真的顯示時才掛，不在啟動時打 GitHub API）。IPC `family:*` 只信任主視窗與設定視窗。
+
+## 8. 安裝檔瘦身（2026-11-06）
+
+量測（win-unpacked）：原 650 MB，其中 `onnxruntime-node` 254 MB（含 macOS / Linux / ARM 二進位 165 MB、DirectML + dxcompiler 38 MB）、tesseract.js-core 四種 wasm 變體 29 MB、Chromium 語系 44 MB、jimp 全家 ~26 MB。
+
+- electron-builder `files` 排除：onnxruntime 只留 `win32/x64/{onnxruntime.dll, onnxruntime_binding.node}`（CPU 版，ocr-node 本來就沒用 DML）；tesseract 只留 `*-lstm` 兩個變體（SIMD + 非 SIMD 後備，預設 OEM 就是 LSTM）；`.map/.d.ts/test/docs` 一律不帶。
+- `electronLanguages: ["zh-TW","zh-CN","en-US"]`。
+- **jimp → sharp**（sharp 已隨 ocr-node 內建，升為直接依賴、版本對齊 0.33.5 去重）：`src/ocr/imagePreprocess.js` 重寫，行為對齊舊版（同一張圖 mean 173.9 vs 173.9、暗像素 5.6% vs 6.0%），速度 226ms → 36ms。3 個單元測試。
+- **順手修掉打包版 Paddle 從來沒成功過的 bug**：ocr-models 預設用 `import.meta.url` 解析模型路徑 → 在 `app.asar` 內，onnxruntime 原生碼 fopen 讀不到 → "File doesn't exist" → 一直靜默退到 Tesseract。現在 `paddle.js` 明確傳 `models:{…}` 並把 `app.asar` 改寫成 `app.asar.unpacked`。打包版實測 Paddle 中文 1.3 秒、英文 97%。
+- 結果：win-unpacked 650 → 346 MB；LZMA 壓縮估算 188.8 → 109.5 MB（約 −42%）。剩下的大戶是 Electron 本體 200 MB（壓後 ~55）、sharp 19、Paddle 模型 15.5、tesseract 13、opencv.js 10。
+- NSIS 安裝檔仍需在有符號連結權限（開發者模式 / 管理員）的環境打包。

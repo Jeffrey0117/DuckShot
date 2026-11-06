@@ -53,7 +53,15 @@
       "src/**/*",
       "renderer/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-node/bin/napi-v*/{darwin,linux}/**",
+      "!node_modules/onnxruntime-node/bin/napi-v*/win32/arm64/**",
+      "!node_modules/onnxruntime-node/bin/napi-v*/win32/x64/{DirectML.dll,dxcompiler.dll,dxil.dll}",
+      "!node_modules/tesseract.js-core/tesseract-core.{js,wasm,wasm.js}",
+      "!node_modules/tesseract.js-core/tesseract-core-simd.{js,wasm,wasm.js}",
+      "!node_modules/**/*.{map,md,markdown,ts,d.ts}",
+      "!node_modules/**/{test,tests,__tests__,docs,example,examples}/**",
+      "!node_modules/@gutenye/ocr-node/src/**"
     ],
     "win": {
       "target": [
@@ -81,13 +89,18 @@
     "linux": {
       "target": "AppImage",
       "icon": "assets/icons/app-icon.png"
-    }
+    },
+    "electronLanguages": [
+      "zh-TW",
+      "zh-CN",
+      "en-US"
+    ]
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@gutenye/ocr-node": "^1.4.8",
     "family-kit": "github:Jeffrey0117/family-kit#30158a3",
-    "jimp": "^1.6.1",
+    "sharp": "^0.33.5",
     "tesseract.js": "^5.1.1"
   }
 }
