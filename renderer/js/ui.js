@@ -595,6 +595,19 @@ class UIManager {
     window.DukshotApp?.thumbs?.reset();
     if (grid) grid.innerHTML = "";
     if (emptyState) emptyState.style.display = "flex";
+    this.mountFamilyPanel();
+  }
+
+  // 空狀態下的「鴨鴨家族」小卡（family-kit）：只掛一次、只在真的顯示空狀態時掛
+  mountFamilyPanel() {
+    if (this.familyMounted) return;
+    const el = document.getElementById("family-empty");
+    if (!el || !window.FamilyKit || !window.familyKit) return;
+    this.familyMounted = true;
+    window.FamilyKit.mount(el, window.familyKit, {
+      title: "鴨鴨家族",
+      subtitle: "看圖用 RePic、看片用 ReVid",
+    });
   }
 
   // 更新狀態列

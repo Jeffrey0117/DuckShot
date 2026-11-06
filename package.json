@@ -86,6 +86,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@gutenye/ocr-node": "^1.4.8",
+    "family-kit": "github:Jeffrey0117/family-kit#30158a3",
     "jimp": "^1.6.1",
     "tesseract.js": "^5.1.1"
   }

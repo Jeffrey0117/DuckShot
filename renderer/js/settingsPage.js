@@ -37,6 +37,29 @@ class SettingsManager {
     await this.loadSettings();
     this.bindEvents();
     this.updateUI();
+    this.mountFamily();
+  }
+
+  // 鴨鴨家族面板：設定視窗直接用 ipcRenderer（nodeIntegration），沒有就用 preload 的 familyKit
+  mountFamily() {
+    const el = document.getElementById('family-panel');
+    if (!el || !window.FamilyKit) return;
+    const api = window.familyKit || (ipcRenderer && ipcRenderer.on ? {
+      list: (o) => ipcRenderer.invoke('family:list', o),
+      install: (id) => ipcRenderer.invoke('family:install', id),
+      open: (id) => ipcRenderer.invoke('family:open', id),
+      page: (id) => ipcRenderer.invoke('family:page', id),
+      onProgress: (cb) => {
+        const h = (_e, p) => cb(p);
+        ipcRenderer.on('family:progress', h);
+        return () => ipcRenderer.removeListener('family:progress', h);
+      },
+    } : null);
+    if (!api) return;
+    window.FamilyKit.mount(el, api, {
+      title: '鴨鴨家族',
+      subtitle: '同一家的工具：看圖用 RePic、看片用 ReVid，一鍵裝好',
+    });
   }
 
   async loadSettings() {

@@ -89,3 +89,11 @@ code review 抓到的問題與處置：
 - 設定存 `settings.upload = { urusaiToken, dukApiKey, dukEnabled }`，相容舊頂層 `urusaiToken` / `dukApiKey` 與 env `URUSAI_TOKEN` / `UPIMG_UPLOAD_KEY`。
 - 設定頁新增「上傳圖床」區塊；上傳成功彈窗顯示用了哪家。
 - `upload-duk` IPC 加來源視窗檢查與 64MB 上限。
+
+## 7. 鴨鴨家族（2026-11-06）
+
+目的是「方便下載、讓使用者兩個都裝」，不是功能串接。抽成 `family-kit`（github:Jeffrey0117/family-kit）三個 app 共用：
+- 偵測已安裝（Windows Uninstall 登錄檔，比對 electron-builder 的 `DisplayName = productName version`）→ 已裝顯示「開啟」，未裝顯示「安裝 (大小)」。
+- 安裝＝抓 GitHub release 最新 `*-Setup-*.exe`、串流下載到 `userData/family-kit/installers`（進度回報、大小驗證）、`shell.openPath` 啟動安裝程式。app 自己寫檔不帶 MotW，SmartScreen 不跳；UAC 仍會問。
+- 清單 `family.json` 放 family-kit repo（raw），各 app 快取 1 小時、抓不到用快取、再沒有用內建；多一個 app 只改那份 JSON。
+- DuckShot 放兩處：設定頁最底下（主要入口）、圖庫空狀態（只在空狀態真的顯示時才掛，不在啟動時打 GitHub API）。IPC `family:*` 只信任主視窗與設定視窗。

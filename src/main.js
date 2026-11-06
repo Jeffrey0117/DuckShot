@@ -17,6 +17,7 @@ const { moveFile } = require("./lib/moveFile");
 const { listImages, imageEntryId } = require("./lib/listImages");
 const { createSaveDirResolver } = require("./lib/saveDir");
 const { buildProviderChain, uploadWithFallback } = require("./upload/providers");
+const createFamily = require("family-kit");
 
 app.commandLine.appendSwitch('--disable-gpu-sandbox');
 // 常駐的覆蓋層視窗在背景時不能被節流（否則 show 出來第一幀會延遲）
@@ -1643,6 +1644,27 @@ class DukshotApp {
         return { success: false, error: e.message };
       }
     });
+
+    // 鴨鴨家族：姊妹 app（RePic / ReVid）偵測已安裝、一鍵下載安裝（family-kit）
+    try {
+      this.family = createFamily({
+        selfId: "duckshot",
+        cacheDir: path.join(app.getPath("userData"), "family-kit"),
+        shell,
+        fetch: (url, init) => net.fetch(url, init),
+        userAgent: `DuckShot/${app.getVersion?.() || "1.0"}`,
+        log: (...a) => console.warn("[family]", ...a),
+      });
+      this.family.registerIpc(ipcMain, {
+        prefix: "family",
+        isTrusted: (sender) =>
+          [this.mainWindow, this.settingsWindow].some(
+            (w) => w && !w.isDestroyed() && w.webContents === sender
+          ),
+      });
+    } catch (e) {
+      console.warn("[family] init failed:", e.message);
+    }
 
     ipcMain.handle("clipboard-write-image", (_event, image) => {
       try {

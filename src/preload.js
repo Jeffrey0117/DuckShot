@@ -143,6 +143,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 });
 
+// 鴨鴨家族面板（family-kit）：清單 / 安裝 / 開啟 / 前往下載 / 下載進度
+contextBridge.exposeInMainWorld("familyKit", {
+  list: (options) => ipcRenderer.invoke("family:list", options),
+  install: (id) => ipcRenderer.invoke("family:install", id),
+  open: (id) => ipcRenderer.invoke("family:open", id),
+  page: (id) => ipcRenderer.invoke("family:page", id),
+  onProgress: (callback) => {
+    const handler = (_event, progress) => callback(progress);
+    ipcRenderer.on("family:progress", handler);
+    return () => ipcRenderer.removeListener("family:progress", handler);
+  },
+});
+
 // 提供一些實用工具函數
 contextBridge.exposeInMainWorld("utils", {
   // 格式化檔案大小

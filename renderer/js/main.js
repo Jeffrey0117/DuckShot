@@ -211,8 +211,11 @@ class DukshotApp {
   }
 
   setupToolbarEvents() {
-    // 截圖按鈕
+    // 截圖按鈕（含空狀態的「開始截圖」）
     document.getElementById("btn-screenshot")?.addEventListener("click", () => {
+      this.capture.startRegionCapture();
+    });
+    document.getElementById("btn-start-capture")?.addEventListener("click", () => {
       this.capture.startRegionCapture();
     });
 
