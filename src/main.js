@@ -68,6 +68,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // 主視窗隱身後等合成器把它真的從桌面拿掉的時間。
 // 舊版「依 os.loadavg() 動態調整」在 Windows 永遠拿到 0，是死邏輯，改為常數。
 const COMPOSITOR_WAIT_MS = 56;
+// 覆蓋層「隱身等擷取」時的不透明度。不能是 0：Windows 上 alpha 0 的 layered window 不吃滑鼠 hit-test，
+// capture.html 的 cursor:none 就不生效，硬體游標會被視訊流截進畫面（v1.2.0 的 regression）。
+// 0.01 肉眼看不見，但視窗仍接得到滑鼠，游標才藏得掉。
+const CAPTURE_HIDDEN_OPACITY = 0.01;
 
 // 隱藏視窗時的螢幕外座標
 const HIDE_OFFSCREEN_POS = { x: -10000, y: -10000 };
@@ -877,7 +881,7 @@ class DukshotApp {
         // 只把覆蓋層轉成完全透明（不 hide：hide/show 會讓 Chromium 重排可見性，
         // 視訊流首幀偶爾會拖到 2~3 秒），透明視窗不會被擷取進下一張畫面；
         // 然後重新走視訊流路徑（跟第一次一樣快，不在主進程編整張 PNG 再塞 IPC）
-        try { cw.setOpacity(0); } catch {}
+        try { cw.setOpacity(CAPTURE_HIDDEN_OPACITY); } catch {}
         await sleep(COMPOSITOR_WAIT_MS);
         if (!this.captureActive || cw.isDestroyed()) return { success: false, error: "截圖已結束" };
         const display = electron.screen.getDisplayMatching(cw.getBounds());
@@ -1799,7 +1803,7 @@ class DukshotApp {
 
     this.captureDrawnSeq = (this.captureDrawnSeq || 0) + 1;
     const seq = this.captureDrawnSeq;
-    try { cw.setOpacity(0); } catch {}
+    try { cw.setOpacity(CAPTURE_HIDDEN_OPACITY); } catch {}
     cw.webContents.send("screen-data", screenData);
     cw.setAlwaysOnTop(true, "screen-saver", 1);
     try { cw.setVisibleOnAllWorkspaces(true); } catch {}
