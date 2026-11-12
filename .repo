@@ -1,0 +1,12 @@
+{
+  "repo": 1,
+  "name": "DuckShot",
+  "what": "DuckShot - 高畫質桌面截圖工具 (Electron)",
+  "kind": "app",
+  "work": {
+    "guide": "CLAUDE.md",
+    "run": "npm run dev",
+    "test": "npm test",
+    "build": "npm run build"
+  }
+}
