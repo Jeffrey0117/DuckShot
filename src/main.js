@@ -337,6 +337,19 @@ class DukshotApp {
     this.saveDirResolver = createSaveDirResolver({ homedir: os.homedir() });
   }
 
+  // 使用者又啟動了一次：把已在跑的主視窗叫到前面（截圖進行中就不打擾）
+  focusMainWindow() {
+    if (this.captureActive) return;
+    const mw = this.mainWindow;
+    if (mw && !mw.isDestroyed()) {
+      if (mw.isMinimized()) mw.restore();
+      mw.show();
+      mw.focus();
+    } else if (electron.app.isReady()) {
+      this.createMainWindow();
+    }
+  }
+
   async initialize() {
     // 等待 Electron 準備完成
     await electron.app.whenReady();
@@ -2441,9 +2454,22 @@ class DukshotApp {
   }
 }
 
-// 創建應用實例並初始化
-const captureApp = new DukshotApp();
-captureApp.initialize().catch(console.error);
+// 單一實例：再點一次捷徑不會多開一份（多份並存會互搶全域快捷鍵與常駐覆蓋層），
+// 只把已經在跑的那份主視窗叫出來。`--dev` 例外，方便開發版與安裝版並存。
+const isDevRun = process.argv.includes("--dev");
+const hasInstanceLock = isDevRun || app.requestSingleInstanceLock();
+
+let captureApp = null;
+if (!hasInstanceLock) {
+  app.quit();
+} else {
+  // 創建應用實例並初始化
+  captureApp = new DukshotApp();
+  if (!isDevRun) {
+    app.on("second-instance", () => captureApp.focusMainWindow());
+  }
+  captureApp.initialize().catch(console.error);
+}
 
 // 匯出應用實例供測試使用
 module.exports = captureApp;
