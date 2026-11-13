@@ -601,6 +601,7 @@
       </button>
     </div>
 
+    <script src="js/firstFrame.js"></script>
     <script>
       // 高 DPI 螢幕截圖系統
       class HighDPICaptureSystem {
@@ -752,7 +753,11 @@
                 this.lastMouseY = screenData.cursorY;
               }
               this.sizeCanvas(screenData.width, screenData.height);
-              this.loadScreenFromStream(screenData, seq);
+              if (FirstFrame.shouldSkipStream(this.streamFailedAt, Date.now())) {
+                this.loadScreenFromFallback(seq);
+              } else {
+                this.loadScreenFromStream(screenData, seq);
+              }
             } else {
               this.captureSeq = (this.captureSeq || 0) + 1;
               this.dpr = window.devicePixelRatio || 1;
@@ -768,7 +773,7 @@
           let stream = null;
           const stale = () => seq !== this.captureSeq; // 使用者已按 Esc 或又開了新一輪
           try {
-            stream = await navigator.mediaDevices.getUserMedia({
+            const pending = navigator.mediaDevices.getUserMedia({
               audio: false,
               video: {
                 mandatory: {
@@ -781,27 +786,33 @@
                 },
               },
             });
+            // 逾時就走後備路徑；遲到的串流要自己關掉，不然擷取會一直開著
+            let abandoned = false;
+            pending.then((s) => { if (abandoned) s.getTracks().forEach((t) => t.stop()); }).catch(() => {});
+            try {
+              // 各段逾時加起來要小於主進程 4 秒的保險現身時間，後備畫面才趕得上
+              stream = await FirstFrame.withTimeout(pending, 1500, 'getUserMedia');
+            } catch (e) {
+              abandoned = true;
+              throw e;
+            }
 
             const tStream = Date.now() - t0;
             const video = document.createElement('video');
             video.srcObject = stream;
             await new Promise((resolve, reject) => {
-              const timer = setTimeout(() => reject(new Error('video metadata timeout')), 3000);
+              const timer = setTimeout(() => reject(new Error('video metadata timeout')), 1500);
               video.onloadedmetadata = () => {
                 clearTimeout(timer);
                 video.play().then(resolve).catch(resolve);
               };
               video.onerror = () => { clearTimeout(timer); reject(new Error('video error')); };
             });
-            // 確保第一幀已可繪製
-            await new Promise((resolve) => {
-              if (typeof video.requestVideoFrameCallback === 'function') {
-                video.requestVideoFrameCallback(() => resolve());
-              } else {
-                setTimeout(resolve, 50);
-              }
-            });
+            // 等一張真的幀。擷取端壞掉時一幀都不會來（readyState 照樣是 4、畫出來全黑），
+            // 逾時就丟錯走後備路徑，不會像以前一樣永遠卡在這裡
+            await FirstFrame.waitForFreshFrame(video);
             if (stale()) return;
+            this.streamFailedAt = null;
 
             this.ctx.save();
             this.ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -817,12 +828,25 @@
           } catch (error) {
             if (stale()) return;
             console.error('視訊流擷取失敗，改用主進程縮圖後備路徑:', error);
-            try { await window.electronAPI.capture.requestScreenDataFallback(); } catch (e) {
-              console.error('後備路徑也失敗:', e);
-            }
+            this.streamFailedAt = Date.now(); // 接下來幾分鐘直接走後備路徑，不必每次白等
+            await this.loadScreenFromFallback(seq);
           } finally {
             try { if (stream) stream.getTracks().forEach((t) => t.stop()); } catch {}
           }
+        }
+
+        // 後備路徑：請主進程用縮圖 API 抓整張畫面送回來（走 screen-data 的字串分支）。
+        // 連後備都失敗就直接收掉覆蓋層 —— 留一個沒暗幕、沒選取框、游標又被藏起來的空殼更糟。
+        async loadScreenFromFallback(seq) {
+          let ok = false;
+          try {
+            const r = await window.electronAPI.capture.requestScreenDataFallback();
+            ok = !!(r && r.success);
+            if (!ok) console.error('後備路徑失敗:', r && r.error);
+          } catch (e) {
+            console.error('後備路徑失敗:', e);
+          }
+          if (!ok && seq === this.captureSeq) this.dismiss();
         }
 
         loadHighResScreenImage(screenData, seq) {
@@ -901,6 +925,8 @@
 
           img.onerror = (error) => {
             console.error('圖片載入失敗:', error);
+            // 畫不出來就收掉覆蓋層，不要留一個不能框選的空殼
+            if (seq === this.captureSeq) this.dismiss();
           };
 
           img.src = screenData;

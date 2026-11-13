@@ -862,8 +862,13 @@ class DukshotApp {
         if (!this.captureWindow || event.sender !== this.captureWindow.webContents || !this.captureActive) {
           return { success: false, error: "no capture window" };
         }
+        // 記下是哪一輪截圖要的：抓圖期間使用者可能已經 Esc 又開了新一輪，
+        // 舊的這張不能送過去蓋掉新一輪的畫面
+        const round = this.captureDrawnSeq;
         const dataUrl = await this.grabScreenDataUrlForCaptureWindow();
-        if (!this.captureActive) return { success: false, error: "capture ended" };
+        if (!this.captureActive || this.captureDrawnSeq !== round) {
+          return { success: false, error: "capture ended" };
+        }
         if (this.captureWindow && !this.captureWindow.isDestroyed()) {
           this.captureWindow.webContents.send("screen-data", dataUrl);
         }
@@ -1959,6 +1964,8 @@ class DukshotApp {
     if (!sources.length) throw new Error("無法獲取螢幕源");
     const target =
       sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
+    // 縮圖擷取失敗時拿到的是空圖；當成失敗處理，不要送一張畫不出來的圖過去
+    if (target.thumbnail.isEmpty()) throw new Error("螢幕縮圖是空的");
     return target.thumbnail.toDataURL();
   }
 
