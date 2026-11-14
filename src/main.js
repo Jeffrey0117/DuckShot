@@ -16,6 +16,7 @@ const os = require("os");
 const { moveFile } = require("./lib/moveFile");
 const { listImages, imageEntryId } = require("./lib/listImages");
 const { createSaveDirResolver } = require("./lib/saveDir");
+const { buildSourceMap, queryDisplayDevices } = require("./lib/screenSourceMap");
 const { buildProviderChain, uploadWithFallback } = require("./upload/providers");
 const createFamily = require("family-kit");
 
@@ -1712,14 +1713,28 @@ class DukshotApp {
         types: ["screen"],
         thumbnailSize: { width: 0, height: 0 },
       });
-      const map = new Map();
-      for (const s of sources) {
-        if (s.display_id) map.set(String(s.display_id), s.id);
-      }
-      this.cachedScreenSources = map;
+      const round = (this.screenSourceRound = (this.screenSourceRound || 0) + 1);
+      const plain = sources.map((s) => ({ id: s.id, display_id: s.display_id }));
+      const displays = electron.screen.getAllDisplays().map((d) => ({
+        id: d.id,
+        origin:
+          typeof electron.screen.dipToScreenPoint === "function"
+            ? electron.screen.dipToScreenPoint({ x: d.bounds.x, y: d.bounds.y })
+            : { x: d.bounds.x, y: d.bounds.y },
+      }));
+      let built = buildSourceMap({ sources: plain, displays, devices: null });
+      this.cachedScreenSources = built.map;
       this.cachedFirstSourceId = sources.length > 0 ? sources[0].id : null;
-      console.log("[perf] screen sources cached:", sources.length, "displays");
-      return map;
+      // 來源沒帶 display_id（DirectX 擷取器不可用時 Electron 不填）而且不只一台螢幕：
+      // 先照順序頂著用，再向 Windows 問裝置座標把對應修正確
+      if (built.method !== "display_id" && sources.length > 1) {
+        const devices = await queryDisplayDevices();
+        if (round !== this.screenSourceRound) return this.cachedScreenSources;
+        built = buildSourceMap({ sources: plain, displays, devices });
+        this.cachedScreenSources = built.map;
+      }
+      console.log("[perf] screen sources cached:", sources.length, "displays, matched by", built.method);
+      return built.map;
     } catch (e) {
       console.warn("refreshScreenSourceId failed:", e.message);
       this.cachedScreenSources = new Map();
@@ -1735,6 +1750,14 @@ class DukshotApp {
       return this.cachedScreenSources.get(key);
     }
     return this.cachedFirstSourceId || null;
+  }
+
+  // 從一批剛抓回來的來源（含縮圖）裡挑出某個螢幕的那一個
+  pickScreenSource(sources, display) {
+    const direct = sources.find((s) => s.display_id && String(s.display_id) === String(display.id));
+    if (direct) return direct;
+    const wanted = this.getSourceIdForDisplay(display.id);
+    return sources.find((s) => s.id === wanted) || sources[0];
   }
 
   async startRegionCapture() {
@@ -1962,8 +1985,7 @@ class DukshotApp {
       thumbnailSize: displayPhysicalSize(display),
     });
     if (!sources.length) throw new Error("無法獲取螢幕源");
-    const target =
-      sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
+    const target = this.pickScreenSource(sources, display);
     // 縮圖擷取失敗時拿到的是空圖；當成失敗處理，不要送一張畫不出來的圖過去
     if (target.thumbnail.isEmpty()) throw new Error("螢幕縮圖是空的");
     return target.thumbnail.toDataURL();
@@ -1978,8 +2000,7 @@ class DukshotApp {
         thumbnailSize: displayPhysicalSize(display),
       });
       if (sources.length === 0) throw new Error("無法找到螢幕源");
-      const target =
-        sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
+      const target = this.pickScreenSource(sources, display);
 
       // 直接拿 PNG 位元組寫檔，不經 base64 來回
       const entry = await this.writeScreenshotFile(target.thumbnail.toPNG(), "png");
