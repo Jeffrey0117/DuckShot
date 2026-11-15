@@ -726,8 +726,11 @@
           const h = Math.max(1, Math.round(physicalH));
           if (this.canvas.width !== w) this.canvas.width = w;
           if (this.canvas.height !== h) this.canvas.height = h;
-          this.canvas.style.width = '100vw';
-          this.canvas.style.height = '100vh';
+          // CSS 尺寸 = 點陣尺寸 ÷ 縮放倍率，讓一個擷取像素剛好落在一個螢幕像素上。
+          // 不能用 100vw/100vh：非整數縮放時視窗會比螢幕多出一兩個像素，整張圖被拉伸就糊了
+          const scale = this.dpr || 1;
+          this.canvas.style.width = `${w / scale}px`;
+          this.canvas.style.height = `${h / scale}px`;
           this.ctx.setTransform(1, 0, 0, 1, 0, 0);
           this.ctx.imageSmoothingEnabled = false;
         }
@@ -743,7 +746,8 @@
               // 不用 window.devicePixelRatio：highDpiCapture 關閉時幀是 DIP 尺寸、
               // 跨螢幕搬移後 DPR/innerWidth 可能還是上一顆螢幕的值
               const dipW = screenData.boundsWidth || window.innerWidth;
-              this.dpr = screenData.width / Math.max(1, dipW);
+              // frameScale（主進程給的真實縮放倍率）優先：117% 這類縮放下 width/boundsWidth 只是近似值
+              this.dpr = screenData.frameScale || screenData.width / Math.max(1, dipW);
               // 隱藏游標模式：覆蓋層套 cursor:none，硬體游標不會被串流截入，改用自訂準星對位
               this.hideCursorMode = !!screenData.hideCursor;
               document.body.classList.toggle('hide-cursor', this.hideCursorMode);
@@ -760,8 +764,8 @@
               }
             } else {
               this.captureSeq = (this.captureSeq || 0) + 1;
-              this.dpr = window.devicePixelRatio || 1;
-              this.sizeCanvas(window.innerWidth * this.dpr, window.innerHeight * this.dpr);
+              // 畫布尺寸等圖片載入後照圖片的實際像素設（見 loadHighResScreenImage），
+              // 縮放倍率沿用這一輪截圖開始時主進程給的值
               this.loadHighResScreenImage(screenData, this.captureSeq);
             }
           });
@@ -856,6 +860,9 @@
             if (seq !== this.captureSeq) return; // 已經被取消/換下一輪
             console.log('圖片載入完成');
             console.log('圖片原始尺寸:', img.naturalWidth, 'x', img.naturalHeight);
+
+            // 畫布點陣尺寸 = 圖片實際像素，下面就一定是 1:1 繪製、不重新取樣
+            this.sizeCanvas(img.naturalWidth, img.naturalHeight);
 
             // 清除 canvas
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);

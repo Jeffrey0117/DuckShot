@@ -18,15 +18,21 @@ const DEVICE_QUERY_SCRIPT = [
   "Add-Type -Namespace DuckShot -Name Dpi -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetProcessDpiAwarenessContext(System.IntPtr v);'",
   "[void][DuckShot.Dpi]::SetProcessDpiAwarenessContext([IntPtr](-4))",
   "Add-Type -AssemblyName System.Windows.Forms",
-  "[System.Windows.Forms.Screen]::AllScreens | ForEach-Object { '{0}|{1}|{2}' -f $_.DeviceName, $_.Bounds.X, $_.Bounds.Y }",
+  "[System.Windows.Forms.Screen]::AllScreens | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.DeviceName, $_.Bounds.X, $_.Bounds.Y, $_.Bounds.Width, $_.Bounds.Height }",
 ].join("; ");
 
-// "\\.\DISPLAY2|0|0" 每行一個裝置 → [{ deviceNumber: 2, x: 0, y: 0 }]
+// PowerShell 的輸出 → [{ deviceNumber: 2, x: 0, y: 0, width: 1920, height: 1080 }, …]
 function parseDeviceList(text) {
   const devices = [];
   for (const line of String(text || "").split(/\r?\n/)) {
-    const m = /DISPLAY(\d+)\|(-?\d+)\|(-?\d+)\s*$/.exec(line.trim());
-    if (m) devices.push({ deviceNumber: Number(m[1]), x: Number(m[2]), y: Number(m[3]) });
+    // 每行：裝置名|x|y|寬|高（實體像素）
+    const m = /DISPLAY(\d+)\|(-?\d+)\|(-?\d+)\|(\d+)\|(\d+)\s*$/.exec(line.trim());
+    if (m) {
+      devices.push({
+        deviceNumber: Number(m[1]), x: Number(m[2]), y: Number(m[3]),
+        width: Number(m[4]), height: Number(m[5]),
+      });
+    }
   }
   return devices;
 }
@@ -46,25 +52,53 @@ function byDisplayId(sources, displays) {
   return map.size === displays.length ? map : null;
 }
 
-function byDevicePosition(sources, displays, devices) {
-  if (!devices || !devices.length || devices.length !== sources.length) return null;
-  if (sources.some((s) => sourceIndex(s.id) === null)) return null;
-  const sortedSources = [...sources].sort((a, b) => sourceIndex(a.id) - sourceIndex(b.id));
-  const sortedDevices = [...devices].sort((a, b) => a.deviceNumber - b.deviceNumber);
+// 用實體座標認出每個螢幕是哪個 Windows 顯示裝置。
+// 回傳 Map<螢幕 id 字串, 裝置>；有任何一台認不出來就回 null（不亂配）。
+function matchDevicesToDisplays(displays, devices) {
+  if (!devices || !devices.length) return null;
   const map = new Map();
   const used = new Set();
   for (const d of displays) {
     let best = -1;
     let bestDist = Infinity;
-    sortedDevices.forEach((dev, i) => {
+    devices.forEach((dev, i) => {
       const dist = Math.max(Math.abs(dev.x - d.origin.x), Math.abs(dev.y - d.origin.y));
       if (!used.has(i) && dist < bestDist) { best = i; bestDist = dist; }
     });
     if (best < 0 || bestDist > ORIGIN_TOLERANCE_PX) return null;
     used.add(best);
-    map.set(String(d.id), sortedSources[best].id);
+    map.set(String(d.id), devices[best]);
   }
   return map;
+}
+
+function byDevicePosition(sources, displays, devices) {
+  if (!devices || devices.length !== sources.length) return null;
+  if (sources.some((s) => sourceIndex(s.id) === null)) return null;
+  const matched = matchDevicesToDisplays(displays, devices);
+  if (!matched) return null;
+  const sortedSources = [...sources].sort((a, b) => sourceIndex(a.id) - sourceIndex(b.id));
+  const rank = devices.map((dev) => dev.deviceNumber).sort((a, b) => a - b);
+  const map = new Map();
+  for (const [displayId, dev] of matched) {
+    map.set(displayId, sortedSources[rank.indexOf(dev.deviceNumber)].id);
+  }
+  return map;
+}
+
+// 擷取畫面要用的像素尺寸。Electron 只給 DIP 尺寸與縮放倍率，117% 這類非整數縮放下
+// 1642 × 1.17 會算成 1921，實際螢幕是 1920——差一個像素整張畫面就要重新取樣、變糊。
+// 所以優先用 Windows 回報的真實解析度（nativeSize），問不到才用乘出來的近似值。
+function framePixelSize({ dipSize, scaleFactor, nativeSize, hiDpi }) {
+  if (!hiDpi) return { width: Math.max(1, dipSize.width), height: Math.max(1, dipSize.height) };
+  if (nativeSize && nativeSize.width > 0 && nativeSize.height > 0) {
+    return { width: nativeSize.width, height: nativeSize.height };
+  }
+  const scale = scaleFactor || 1;
+  return {
+    width: Math.max(1, Math.round(dipSize.width * scale)),
+    height: Math.max(1, Math.round(dipSize.height * scale)),
+  };
 }
 
 function byOrder(sources, displays) {
@@ -105,4 +139,10 @@ function queryDisplayDevices() {
   });
 }
 
-module.exports = { parseDeviceList, buildSourceMap, queryDisplayDevices };
+module.exports = {
+  parseDeviceList,
+  buildSourceMap,
+  matchDevicesToDisplays,
+  framePixelSize,
+  queryDisplayDevices,
+};

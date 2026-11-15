@@ -16,7 +16,12 @@ const os = require("os");
 const { moveFile } = require("./lib/moveFile");
 const { listImages, imageEntryId } = require("./lib/listImages");
 const { createSaveDirResolver } = require("./lib/saveDir");
-const { buildSourceMap, queryDisplayDevices } = require("./lib/screenSourceMap");
+const {
+  buildSourceMap,
+  matchDevicesToDisplays,
+  framePixelSize,
+  queryDisplayDevices,
+} = require("./lib/screenSourceMap");
 const { buildProviderChain, uploadWithFallback } = require("./upload/providers");
 const createFamily = require("family-kit");
 
@@ -36,12 +41,16 @@ app.setPath('userData', userDataPath);
 // 只抓「該螢幕的實際大小」：不再 max(…,1920)/8K 後備，1366×768 的老筆電不會被要求放大擷取。
 function displayPhysicalSize(display) {
   const useHiDpi = typeof store?.get === "function" ? store.get("highDpiCapture") !== false : true;
-  const scale = useHiDpi ? display.scaleFactor || 1 : 1;
-  return {
-    width: Math.max(1, Math.round(display.size.width * scale)),
-    height: Math.max(1, Math.round(display.size.height * scale)),
-  };
+  return framePixelSize({
+    dipSize: display.size,
+    scaleFactor: display.scaleFactor,
+    nativeSize: nativeDisplaySizes.get(String(display.id)) || null,
+    hiDpi: useHiDpi,
+  });
 }
+
+// 各螢幕的真實解析度（螢幕 id → {width, height}），refreshScreenSourceId 向 Windows 問到後填入
+let nativeDisplaySizes = new Map();
 
 function displayUnderCursor() {
   const pt = electron.screen.getCursorScreenPoint();
@@ -1725,11 +1734,16 @@ class DukshotApp {
       let built = buildSourceMap({ sources: plain, displays, devices: null });
       this.cachedScreenSources = built.map;
       this.cachedFirstSourceId = sources.length > 0 ? sources[0].id : null;
-      // 來源沒帶 display_id（DirectX 擷取器不可用時 Electron 不填）而且不只一台螢幕：
-      // 先照順序頂著用，再向 Windows 問裝置座標把對應修正確
-      if (built.method !== "display_id" && sources.length > 1) {
-        const devices = await queryDisplayDevices();
-        if (round !== this.screenSourceRound) return this.cachedScreenSources;
+      // 向 Windows 問每個顯示裝置的座標與真實解析度（約 0.7 秒，這段期間先用上面照順序配的結果）：
+      // 1. 來源沒帶 display_id 時（DirectX 擷取器不可用 Electron 就不填）靠座標把來源對到正確的螢幕
+      // 2. 非整數縮放下 Electron 算不出真實解析度，要用它才能 1:1 擷取不糊
+      const devices = await queryDisplayDevices();
+      if (round !== this.screenSourceRound) return this.cachedScreenSources;
+      const matched = matchDevicesToDisplays(displays, devices);
+      nativeDisplaySizes = new Map(
+        [...(matched || [])].map(([id, dev]) => [id, { width: dev.width, height: dev.height }])
+      );
+      if (built.method !== "display_id") {
         built = buildSourceMap({ sources: plain, displays, devices });
         this.cachedScreenSources = built.map;
       }
@@ -1828,6 +1842,9 @@ class DukshotApp {
       boundsWidth: targetDisplay.bounds.width,   // 目標螢幕 DIP（renderer 用 width/boundsWidth 算縮放，
       boundsHeight: targetDisplay.bounds.height, // 不依賴可能還沒更新的 devicePixelRatio / innerWidth）
       scaleFactor: targetDisplay.scaleFactor || 1,
+      // 擷取幀的像素數 ÷ 畫面上的 CSS 像素數：高解析擷取時就是螢幕縮放倍率，
+      // renderer 用它把畫布排成「一個擷取像素 = 一個螢幕像素」，不用 width/boundsWidth 的近似值
+      frameScale: size.width === targetDisplay.bounds.width ? 1 : targetDisplay.scaleFactor || 1,
       hideCursor: store.get("hideCursor") !== false,
       cursorX: cursorPt.x - targetDisplay.bounds.x,
       cursorY: cursorPt.y - targetDisplay.bounds.y,
