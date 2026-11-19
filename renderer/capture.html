@@ -235,6 +235,22 @@
         cursor: none !important;
       }
 
+      /* 上傳彈窗蓋在假游標上面（z-index 2000 > 1005），彈窗內要把真游標還回來，
+         不然使用者看不到游標、點不到「完成／複製」。此時畫面早已凍結，真游標不會被截進圖裡 */
+      body.hide-cursor .upload-modal.show,
+      body.hide-cursor .upload-modal.show * {
+        cursor: default !important;
+      }
+      body.hide-cursor .upload-modal.show button,
+      body.hide-cursor .upload-modal.show .link-value {
+        cursor: pointer !important;
+      }
+      /* 彈窗開著時收起假游標，避免暗幕上同時出現兩個游標 */
+      body.hide-cursor:has(.upload-modal.show) .duck-cursor,
+      body.hide-cursor:has(.upload-modal.show) .crosshair-line {
+        display: none !important;
+      }
+
       /* 融合假游標：全螢幕十字對齊線 + 鴨 logo + 精準對位點，純疊層、不進存檔畫面 */
       .crosshair-line {
         position: fixed;
