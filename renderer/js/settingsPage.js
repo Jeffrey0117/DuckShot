@@ -35,6 +35,7 @@ class SettingsManager {
 
   async init() {
     await this.loadSettings();
+    this.applyTheme();
     this.bindEvents();
     this.updateUI();
     this.mountFamily();
@@ -138,8 +139,11 @@ class SettingsManager {
     };
   }
 
-  // 保留空方法，避免影響既有外觀
-  applyTheme() {}
+  // 跟隨 DuckShot 主題（main.css 的顏色變數依 data-theme 切換，沒設就整頁沒顏色）
+  applyTheme() {
+    const theme = this.settings && this.settings.theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = theme;
+  }
 
   bindEvents() {
     // 視窗設定
@@ -170,7 +174,8 @@ class SettingsManager {
     });
 
     // 編輯快捷鍵按鈕
-    document.querySelectorAll('.edit-key-btn').forEach(btn => {
+    // 只綁有 data-shortcut 的按鈕：別的按鈕就算借用同一個樣式，也不會被當成快捷鍵按鈕
+    document.querySelectorAll('.edit-key-btn[data-shortcut]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const shortcutType = e.target.dataset.shortcut;
         this.startRecordingShortcut(shortcutType);
@@ -178,7 +183,7 @@ class SettingsManager {
     });
 
     // 重設快捷鍵按鈕
-    document.querySelectorAll('.reset-key-btn').forEach(btn => {
+    document.querySelectorAll('.reset-key-btn[data-shortcut]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const shortcutType = e.target.dataset.shortcut;
         this.resetShortcut(shortcutType);

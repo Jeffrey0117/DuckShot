@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<!-- data-theme 一定要有：main.css 的顏色變數全部定義在 :root[data-theme] 底下，
+     沒有這個屬性整頁就沒有底色、邊框，開關也看不到 -->
+<html lang="zh-TW" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -165,25 +167,43 @@
       gap: 12px;
     }
 
-    .edit-key-btn, .reset-key-btn {
-      padding: 4px 12px;
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      background: transparent;
-      color: var(--text-secondary);
-      font-size: 12px;
+    /* 設定列裡的小按鈕：快捷鍵的編輯／重設，以及儲存位置的瀏覽／開啟 */
+    .edit-key-btn, .reset-key-btn, .setting-btn {
+      height: 32px;
+      padding: 0 14px;
+      border: 1px solid var(--border-medium);
+      border-radius: 6px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-size: 13px;
+      white-space: nowrap;
       cursor: pointer;
       transition: all 0.2s;
     }
 
-    .edit-key-btn:hover {
+    .edit-key-btn:hover, .setting-btn:hover {
       border-color: var(--primary-color);
       color: var(--primary-color);
     }
 
+    .reset-key-btn {
+      color: var(--text-secondary);
+    }
+
     .reset-key-btn:hover {
-      border-color: var(--text-tertiary);
-      color: var(--text-tertiary);
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .shortcut-input {
+      height: 32px;
+      box-sizing: border-box;
+    }
+
+    .path-input {
+      width: 300px;
+      cursor: default;
+      text-overflow: ellipsis;
     }
 
     /* 按鈕區域 */
@@ -306,9 +326,9 @@
           <span class="label-description">截圖儲存的資料夾（預設：圖片\DuckShot）</span>
         </div>
         <div class="setting-control">
-          <input type="text" id="save-directory" class="shortcut-input" style="width: 240px;" readonly title="">
-          <button class="edit-key-btn" id="browse-save-dir">瀏覽…</button>
-          <button class="reset-key-btn" id="open-save-dir">開啟</button>
+          <input type="text" id="save-directory" class="shortcut-input path-input" readonly title="">
+          <button class="setting-btn" id="browse-save-dir">更改…</button>
+          <button class="setting-btn" id="open-save-dir">開啟資料夾</button>
         </div>
       </div>
       <div class="setting-item">
